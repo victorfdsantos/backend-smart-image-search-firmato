@@ -1,3 +1,10 @@
+data/
+landing_zone/
+local_nas/
+logs/
+temp/
+temp_uploads/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
