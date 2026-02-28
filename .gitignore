@@ -4,6 +4,11 @@ local_nas/
 logs/
 temp/
 temp_uploads/
+src/landing/
+src/output/
+src/data/
+src/logs/
+temp_uploads
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
