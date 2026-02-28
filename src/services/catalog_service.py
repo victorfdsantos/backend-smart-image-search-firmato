@@ -188,8 +188,8 @@ class CatalogService:
         chave = self.image_service.generate_hash(row_dict)
         updated["Chave_Especial"] = chave
         updated["Caminho_Imagem"] = str(nas_result)
-        if gcs_uri:
-            updated["Caminho_Bucket"] = gcs_uri
+        # if gcs_uri:
+        #     updated["Caminho_Bucket"] = gcs_uri
 
         self._filenames_to_clean.append(filename_principal)
 
@@ -323,8 +323,8 @@ class CatalogService:
 
         dest_path = nas_dir / original_path.name
         try:
-            df.to_excel(original_path, index=False, sheet_name="Catalogo_Produtos")
-            self.logger.info(f"Planilha salva: {original_path}")
+            df.to_excel(dest_path, index=False, sheet_name="Catalogo_Produtos")
+            self.logger.info(f"Planilha salva: {dest_path}")
         except Exception as exc:
             self.logger.error(
                 f"Erro ao salvar planilha original: {exc}. Tentando salvar com sufixo.",
