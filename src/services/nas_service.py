@@ -78,11 +78,12 @@ class NasService:
     def move_product_folder(self, current_path: Path, new_path: Path) -> bool:
         """
         Move toda a pasta de um produto de current_path para new_path.
-        Útil quando colunas organizadoras (ex: Marca, Linha_Colecao) mudam.
+        Garante a remoção completa da pasta de origem após a movimentação,
+        incluindo limpeza de pastas pai que ficaram vazias.
         Retorna True em sucesso.
         """
         try:
-            if current_path == new_path:
+            if current_path.resolve() == new_path.resolve():
                 self.logger.info(
                     f"[NAS] Pasta já está no caminho correto, nenhuma movimentação necessária: "
                     f"{current_path}"
@@ -97,24 +98,32 @@ class NasService:
 
             new_path.parent.mkdir(parents=True, exist_ok=True)
 
-            # Se o destino já existe, mescla o conteúdo em vez de sobrescrever
+            # Guarda o pai antes de mover para poder limpar depois
+            origin_parent = current_path.parent
+
             if new_path.exists():
+                # Destino já existe: copia cada arquivo e depois apaga a origem inteira
                 self.logger.warning(
-                    f"[NAS] Pasta de destino já existe. Mesclando conteúdo: {new_path}"
+                    f"[NAS] Pasta de destino já existe. Mesclando e removendo origem: {new_path}"
                 )
                 for item in current_path.iterdir():
                     dest_item = new_path / item.name
                     if dest_item.exists():
                         dest_item.unlink()
+                        self.logger.debug(f"[NAS] Sobrescrito no destino: {dest_item}")
                     shutil.move(str(item), str(dest_item))
-                current_path.rmdir()
+
+                # Remove a pasta de origem (agora vazia) de forma garantida
+                shutil.rmtree(str(current_path), ignore_errors=False)
+                self.logger.info(f"[NAS] Origem removida após mesclagem: {current_path}")
             else:
+                # Destino não existe: move diretamente (atômico no mesmo filesystem)
                 shutil.move(str(current_path), str(new_path))
 
-            self.logger.info(f"[NAS] Pasta movida: {current_path} → {new_path}")
+            self.logger.info(f"[NAS] Pasta movida com sucesso: {current_path} → {new_path}")
 
             # Remove pastas pai que ficaram vazias após a movimentação
-            self._cleanup_empty_parents(current_path.parent)
+            self._cleanup_empty_parents(origin_parent)
             return True
 
         except Exception as exc:

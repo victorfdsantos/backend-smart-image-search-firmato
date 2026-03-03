@@ -50,10 +50,6 @@ class NasSettings:
 class GcsSettings:
     bucket_name: str = _cfg.get("gcs", "bucket_name")
     credentials_path: Path = _resolve(_cfg.get("gcs", "credentials_path"))
-    bucket_prefix: str = _cfg.get("gcs", "bucket_prefix")
-    organizer_columns: list[str] = [
-        c.strip() for c in _cfg.get("gcs", "organizer_columns").split(",")
-    ]
 
 
 class HashSettings:

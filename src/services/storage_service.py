@@ -8,15 +8,17 @@ from config.settings import settings
 class StorageService:
     """
     Serviço responsável por operações no Google Cloud Storage (GCS).
+    Estrutura do bucket: images/{filename}  (ex: images/1.jpg, images/1A.jpg)
+    Sem hierarquia organizacional — o bucket é um repositório flat acessado apenas pelo sistema.
     Requer a lib google-cloud-storage instalada e credenciais configuradas.
     """
+
+    _IMAGES_PREFIX = "images"
 
     def __init__(self, logger: logging.Logger):
         self.logger = logger
         self.bucket_name = settings.gcs.bucket_name
         self.credentials_path = settings.gcs.credentials_path
-        self.bucket_prefix = settings.gcs.bucket_prefix
-        self.organizer_columns = settings.gcs.organizer_columns
         self._client = None
         self._bucket = None
 
@@ -43,9 +45,7 @@ class StorageService:
                 self._client = gcs.Client()
 
             self._bucket = self._client.bucket(self.bucket_name)
-            self.logger.info(
-                f"[GCS] Cliente inicializado. Bucket: {self.bucket_name}"
-            )
+            self.logger.info(f"[GCS] Cliente inicializado. Bucket: {self.bucket_name}")
             return self._client
 
         except ImportError:
@@ -64,37 +64,26 @@ class StorageService:
     # Utilitários
     # ------------------------------------------------------------------
 
-    def build_blob_path(self, data_row: dict, product_id: int, filename: str) -> str:
+    def build_blob_name(self, filename: str) -> str:
         """
-        Monta o caminho (blob name) dentro do bucket.
-        Estrutura: {prefix}/{col1}/{col2}/.../{ID}/{filename}
+        Monta o blob name dentro do bucket.
+        Estrutura: images/{filename}  (ex: images/1.jpg)
         """
-        parts = [
-            self._sanitize(str(data_row.get(col, "desconhecido")))
-            for col in self.organizer_columns
-        ]
-        path_parts = [self.bucket_prefix] + parts + [str(product_id), filename]
-        return "/".join(p for p in path_parts if p)
-
-    def _sanitize(self, value: str) -> str:
-        """Remove caracteres problemáticos para paths de bucket GCS."""
-        for ch in ["#", "[", "]", "?", "*"]:
-            value = value.replace(ch, "_")
-        return value.strip()[:100]
+        return f"{self._IMAGES_PREFIX}/{filename}"
 
     # ------------------------------------------------------------------
-    # Operações de arquivo
+    # Upload
     # ------------------------------------------------------------------
 
-    def upload_image(
-        self, local_path: Path, blob_name: str
-    ) -> Optional[str]:
+    def upload_image(self, local_path: Path, filename: str) -> Optional[str]:
         """
-        Faz upload de imagem para o GCS.
+        Faz upload de imagem para o GCS em images/{filename}.
+        Se já existir um blob com esse nome, sobrescreve.
         Retorna a URI gs:// em caso de sucesso, None em caso de erro.
         """
+        blob_name = self.build_blob_name(filename)
         try:
-            client = self._get_client()
+            self._get_client()
             blob = self._bucket.blob(blob_name)
             blob.upload_from_filename(str(local_path), content_type="image/jpeg")
             uri = f"gs://{self.bucket_name}/{blob_name}"
@@ -107,24 +96,33 @@ class StorageService:
             )
             return None
 
-    def get_image_url(self, blob_name: str) -> Optional[str]:
+    # ------------------------------------------------------------------
+    # Get
+    # ------------------------------------------------------------------
+
+    def get_image_url(self, filename: str) -> str:
         """
-        Retorna a URL pública (ou URI gs://) de uma imagem no bucket.
+        Retorna a URI gs:// de uma imagem pelo nome do arquivo.
         Preparado para futura expansão (ex: signed URLs).
         """
-        try:
-            return f"gs://{self.bucket_name}/{blob_name}"
-        except Exception as exc:
-            self.logger.error(
-                f"[GCS] Erro ao montar URL para '{blob_name}': {exc}", exc_info=True
-            )
-            return None
+        return f"gs://{self.bucket_name}/{self.build_blob_name(filename)}"
 
-    def delete_image(self, blob_name: str) -> bool:
-        """Remove imagem do bucket. Retorna True em sucesso."""
+    # ------------------------------------------------------------------
+    # Delete
+    # ------------------------------------------------------------------
+
+    def delete_image(self, filename: str) -> bool:
+        """
+        Remove imagem do bucket pelo nome do arquivo.
+        Retorna True em sucesso, False se não encontrado ou erro.
+        """
+        blob_name = self.build_blob_name(filename)
         try:
-            client = self._get_client()
+            self._get_client()
             blob = self._bucket.blob(blob_name)
+            if not blob.exists():
+                self.logger.warning(f"[GCS] Blob não encontrado para remoção: {blob_name}")
+                return False
             blob.delete()
             self.logger.info(f"[GCS] Blob removido: {blob_name}")
             return True
@@ -133,3 +131,14 @@ class StorageService:
                 f"[GCS] Erro ao remover blob '{blob_name}': {exc}", exc_info=True
             )
             return False
+
+    def delete_images(self, filenames: list[str]) -> dict[str, bool]:
+        """
+        Remove múltiplas imagens do bucket de uma vez.
+        Retorna dict filename → True/False indicando sucesso de cada remoção.
+        Útil ao substituir imagem principal ou remover secundárias.
+        """
+        results: dict[str, bool] = {}
+        for filename in filenames:
+            results[filename] = self.delete_image(filename)
+        return results

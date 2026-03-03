@@ -40,11 +40,11 @@ class SpreadsheetService:
     # Escrita
     # ------------------------------------------------------------------
 
-    def save(self, df: pd.DataFrame, original_path: Path) -> Path:
+    def save(self, df: pd.DataFrame, original_path: Path) -> Optional[Path]:
         """
         Salva o DataFrame no NAS (pasta planilhas/).
         Se falhar, tenta salvar com sufixo de data/hora para não perder dados.
-        Retorna o caminho onde foi salvo.
+        Retorna o caminho onde foi salvo, ou None em falha total.
         """
         nas_dir = settings.nas.base_path / "planilhas"
         nas_dir.mkdir(parents=True, exist_ok=True)
@@ -84,7 +84,12 @@ class SpreadsheetService:
     # ------------------------------------------------------------------
 
     def row_to_model(self, row_dict: dict) -> ProductModel:
-        """Converte um dicionário de linha do Excel para ProductModel."""
+        """
+        Converte um dicionário de linha do Excel para ProductModel.
+        Apenas preenche os campos mapeados em COLUMN_MAP (dados do produto).
+        Campos exclusivos do JSON (caminhos NAS/bucket) devem ser preenchidos
+        pelo CatalogService após o processamento.
+        """
         model = ProductModel()
         for excel_col, model_field in COLUMN_MAP.items():
             val = row_dict.get(excel_col)
