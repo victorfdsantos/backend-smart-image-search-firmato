@@ -1,20 +1,3 @@
-"""
-CatalogService
---------------
-Serviço principal do fluxo de cadastro e manutenção do catálogo.
-
-Fluxo por produto:
-  1. DiffService produz um ProductDiff (Excel vs JSON em disco)
-  2. CatalogService age sobre o diff:
-     a. Produto novo          → processa imagens + gera JSON + atualiza Excel
-     b. Imagem principal nova → reprocessa imagem, atualiza NAS/bucket/JSON/Excel
-     c. Imagem secundária nova → idem para o slot correspondente
-     d. Colunas NAS mudaram  → move pasta no NAS, atualiza caminhos no JSON/Excel
-     e. Só dados mudaram     → atualiza JSON (caminhos NAS/bucket são preservados do JSON)
-  3. Planilha salva no NAS com os novos valores
-  4. Landing limpa (apenas arquivos processados nesta execução)
-"""
-
 import logging
 import shutil
 import tempfile
@@ -35,9 +18,6 @@ from services.json_service import JsonService
 from services.nas_service import NasService
 from services.spreadsheet_service import SpreadsheetService
 from services.storage_service import StorageService
-
-_PROCESSED_MARKER = "Processada"
-
 
 class CatalogService:
 
@@ -624,14 +604,7 @@ class CatalogService:
             f"Id {product_id}: [{label}] Processando imagem '{source_filename}' → '{dest_filename}'"
         )
 
-        # 1. Validar extensão
-        if not self.image_service.validate_extension(source_filename):
-            self.logger.error(
-                f"Id {product_id}: [{label}] Extensão inválida para '{source_filename}'."
-            )
-            return None, None
-
-        # 2. Verificar na landing
+        # 1. Verificar na landing
         landing_path = self.image_service.file_exists_in_landing(source_filename)
         if landing_path is None:
             self.logger.error(
@@ -640,7 +613,7 @@ class CatalogService:
             )
             return None, None
 
-        # 3. Processar (resize + conversão JPG)
+        # 2. Processar (resize + conversão JPG)
         temp_dir = Path(tempfile.mkdtemp())
         temp_img = temp_dir / dest_filename
 
@@ -652,7 +625,7 @@ class CatalogService:
                 )
                 return None, None
 
-            # 4. Salvar no NAS
+            # 3. Salvar no NAS
             nas_folder = self.nas_service.build_product_path(row_dict, product_id)
             nas_result = self.nas_service.save_image(temp_img, nas_folder, dest_filename)
             if nas_result is None:
@@ -661,7 +634,7 @@ class CatalogService:
                 )
                 return None, None
 
-            # 5. Upload GCS (comentado até ativar)
+            # 4. Upload GCS (comentado até ativar)
             # bucket_uri = self.storage_service.upload_image(temp_img, dest_filename)
             # if bucket_uri is None:
             #     self.logger.warning(

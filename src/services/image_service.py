@@ -25,31 +25,23 @@ class ImageService:
     # Validação
     # ------------------------------------------------------------------
 
-    def validate_extension(self, filename: str) -> bool:
-        """Verifica se o arquivo possui extensão suportada."""
-        ext = Path(filename).suffix.lower()
-        if not ext:
-            self.logger.warning(f"Arquivo sem extensão detectado: '{filename}'")
-            return False
-        if ext not in self.allowed_extensions:
-            self.logger.warning(
-                f"Extensão '{ext}' não suportada para '{filename}'. "
-                f"Extensões aceitas: {self.allowed_extensions}"
-            )
-            return False
-        return True
-
-    def file_exists_in_landing(self, filename: str) -> Optional[Path]:
+    def file_exists_in_landing(self, filename_without_ext: str) -> Optional[Path]:
         """
-        Verifica se o arquivo existe na pasta landing.
-        Retorna o Path completo se encontrado, None caso contrário.
+        Recebe apenas o nome base do arquivo (sem extensão).
+        Procura na landing por qualquer extensão permitida.
+        Retorna o Path completo se encontrar.
         """
         landing = settings.general.landing_path
-        path = landing / filename
-        if path.exists():
-            return path
+
+        for ext in self.allowed_extensions:
+            candidate = landing / f"{filename_without_ext}{ext}"
+            if candidate.exists():
+                self.logger.debug(f"Arquivo encontrado: {candidate}")
+                return candidate
+
         self.logger.warning(
-            f"Arquivo '{filename}' não encontrado na landing: {landing}"
+            f"Arquivo '{filename_without_ext}' não encontrado "
+            f"com extensões permitidas: {self.allowed_extensions}"
         )
         return None
 

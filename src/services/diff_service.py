@@ -26,8 +26,8 @@ from models.product_model import (
     SECONDARY_BUCKET_FIELDS,
     COLUMN_MAP,
 )
-from services.product_diff_model import ProductDiff, SecondaryImageDiff
-from services.secondary_image_diff_model import SecondaryImageDiff
+from models.product_diff_model import ProductDiff
+from models.secondary_image_diff_model import SecondaryImageDiff
 from services.json_service import JsonService
 
 _PROCESSED_MARKER = "Processada"

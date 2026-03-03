@@ -7,6 +7,7 @@ ProductDiff         → estado completo de um produto após o diff
 """
 
 from dataclasses import dataclass, field
+from models.secondary_image_diff_model import SecondaryImageDiff
 from typing import Optional
 
 @dataclass
