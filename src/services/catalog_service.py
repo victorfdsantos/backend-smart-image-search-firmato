@@ -1,3 +1,15 @@
+"""
+CatalogService
+--------------
+Orquestra o fluxo de cadastro e manutenção do catálogo.
+
+Por produto:
+  1. DiffService compara Excel vs JSON → ProductDiff
+  2. CatalogService executa as ações indicadas pelo diff
+  3. JSON é salvo com o estado final
+  4. Excel é atualizado com novos caminhos
+"""
+
 import logging
 import shutil
 import tempfile
@@ -5,19 +17,15 @@ from pathlib import Path
 from typing import Optional
 
 from config.settings import settings
-from models.product_model import (
-    ProductModel,
-    SECONDARY_SLOTS,
-    SECONDARY_EXCEL_COLS,
-    SECONDARY_NAS_FIELDS,
-    SECONDARY_BUCKET_FIELDS,
-)
-from services.diff_service import DiffService, ProductDiff, SecondaryImageDiff
+from models.product_model import ProductModel, SECONDARY_SLOTS, SECONDARY_EXCEL_COLS, SECONDARY_NAS_FIELDS, SECONDARY_BUCKET_FIELDS
+from models.product_diff_model import ProductDiff
+from models.secondary_image_diff_model import SecondaryImageDiff
+from services.diff_service import DiffService
 from services.image_service import ImageService
 from services.json_service import JsonService
 from services.nas_service import NasService
 from services.spreadsheet_service import SpreadsheetService
-from services.storage_service import StorageService
+
 
 class CatalogService:
 
@@ -27,39 +35,27 @@ class CatalogService:
         self.nas_service = NasService(logger)
         self.spreadsheet_service = SpreadsheetService(logger)
         self.json_service = JsonService(logger)
-        self.diff_service = DiffService(logger, JsonService(logger))
-        # self.storage_service = StorageService(logger)
+        self.diff_service = DiffService(logger, self.json_service)
 
-        # Nomes de arquivo da landing que foram processados nesta execução
         self._filenames_to_clean: list[str] = []
+        # Cache de caminhos NAS gerados nesta execução: (product_id, slot) → str | None
+        # None = slot foi deletado; ausente = não tocado (preserva JSON)
+        self._secondary_cache: dict[tuple[int, int], Optional[str]] = {}
 
-    # ======================================================================
+    # ------------------------------------------------------------------
     # Ponto de entrada
-    # ======================================================================
+    # ------------------------------------------------------------------
 
     def process_spreadsheet(self, xlsx_path: Path) -> dict:
-        """
-        Executa o fluxo completo de cadastro/manutenção a partir de uma planilha.
-        Retorna dicionário com estatísticas da execução.
-        """
         stats = {
-            "total": 0,
-            "novos": 0,
-            "imagem_principal_atualizada": 0,
-            "secundarias_processadas": 0,
-            "secundarias_deletadas": 0,
-            "pasta_nas_movida": 0,
-            "dados_atualizados": 0,
-            "ignorados": 0,
-            "erros": 0,
-            "arquivos_limpos": 0,
+            "total": 0, "novos": 0, "imagem_principal_atualizada": 0,
+            "secundarias_processadas": 0, "secundarias_deletadas": 0,
+            "pasta_nas_movida": 0, "dados_atualizados": 0,
+            "ignorados": 0, "erros": 0, "arquivos_limpos": 0,
         }
 
-        self.logger.info("=" * 60)
-        self.logger.info(f"Iniciando processamento da planilha: {xlsx_path}")
-        self.logger.info("=" * 60)
+        self.logger.info(f"{'=' * 60}\nIniciando processamento: {xlsx_path}\n{'=' * 60}")
 
-        # 1. Carregar planilha
         try:
             df = self.spreadsheet_service.load(xlsx_path)
         except Exception as exc:
@@ -67,653 +63,283 @@ class CatalogService:
             raise
 
         stats["total"] = len(df)
-        self.logger.info(f"Total de linhas a processar: {stats['total']}")
 
-        # 2. Iterar linhas
         for idx, row in df.iterrows():
             row_dict = row.to_dict()
             product_id = self.spreadsheet_service.parse_id(row_dict.get("Id_produto"))
 
             if product_id is None:
-                self.logger.warning(
-                    f"Linha {idx + 2}: Id_produto inválido ou vazio — pulando."
-                )
+                self.logger.warning(f"Linha {idx + 2}: Id_produto inválido — pulando.")
                 stats["erros"] += 1
                 continue
 
-            self.logger.info(f"{'─' * 50}")
-            self.logger.info(f"Linha {idx + 2} | Id_produto: {product_id}")
+            self.logger.info(f"{'─' * 50}\nLinha {idx + 2} | Id {product_id}")
 
-            # 2a. Gerar diff
             try:
                 diff = self.diff_service.build(product_id, row_dict)
             except Exception as exc:
-                self.logger.error(
-                    f"Id {product_id}: Falha ao gerar diff: {exc}", exc_info=True
-                )
+                self.logger.error(f"Id {product_id}: erro no diff: {exc}", exc_info=True)
                 stats["erros"] += 1
                 continue
 
             if not diff.has_any_change:
-                self.logger.info(f"Id {product_id}: Sem alterações detectadas — ignorando.")
+                self.logger.info(f"Id {product_id}: sem alterações.")
                 stats["ignorados"] += 1
                 continue
 
-            # 2b. Executar ações com base no diff
             try:
-                excel_updates = self._execute_diff(diff)
+                excel_updates = self._execute(diff)
             except Exception as exc:
-                self.logger.error(
-                    f"Id {product_id}: Erro inesperado ao executar diff: {exc}",
-                    exc_info=True,
-                )
+                self.logger.error(f"Id {product_id}: erro inesperado: {exc}", exc_info=True)
                 stats["erros"] += 1
                 continue
 
             if excel_updates is None:
-                # Retorno None = erro já logado em _execute_diff
                 stats["erros"] += 1
                 continue
 
-            # 2c. Aplicar atualizações ao DataFrame
             for col, val in excel_updates.items():
                 if col in df.columns:
                     df.at[idx, col] = val
-                    self.logger.debug(
-                        f"Id {product_id}: Excel atualizado — '{col}' = '{val}'"
-                    )
 
-            # 2d. Contabilizar estatísticas
-            if diff.is_new_product:
-                stats["novos"] += 1
-            else:
-                if diff.primary_is_changed:
-                    stats["imagem_principal_atualizada"] += 1
-                if diff.secondary_changes:
-                    stats["secundarias_processadas"] += len(diff.secondary_changes)
-                if diff.secondary_deletions:
-                    stats["secundarias_deletadas"] += len(diff.secondary_deletions)
-                if diff.nas_path_changed:
-                    stats["pasta_nas_movida"] += 1
-                if diff.data_fields_changed and not (
-                    diff.primary_is_changed or diff.secondary_changes
-                    or diff.secondary_deletions or diff.nas_path_changed
-                ):
-                    stats["dados_atualizados"] += 1
+            self._count_stats(stats, diff)
 
-        self.logger.info("=" * 60)
-        self.logger.info("Finalizando: salvando planilha e limpando landing.")
-
-        # 3. Salvar planilha atualizada no NAS
         self.spreadsheet_service.save(df, xlsx_path)
-
-        # 4. Limpar landing
         stats["arquivos_limpos"] = self._cleanup_landing()
-
-        self.logger.info(f"Processamento concluído. Stats: {stats}")
-        self.logger.info("=" * 60)
+        self.logger.info(f"Concluído. Stats: {stats}")
         return stats
 
-    # ======================================================================
-    # Executor do diff
-    # ======================================================================
+    def _count_stats(self, stats: dict, diff: ProductDiff) -> None:
+        if diff.is_new_product:
+            stats["novos"] += 1
+            return
+        if diff.primary_is_changed:
+            stats["imagem_principal_atualizada"] += 1
+        if diff.secondary_changes:
+            stats["secundarias_processadas"] += len(diff.secondary_changes)
+        if diff.secondary_deletions:
+            stats["secundarias_deletadas"] += len(diff.secondary_deletions)
+        if diff.nas_path_changed:
+            stats["pasta_nas_movida"] += 1
+        if diff.data_fields_changed and not any([
+            diff.primary_is_changed, diff.secondary_changes,
+            diff.secondary_deletions, diff.nas_path_changed
+        ]):
+            stats["dados_atualizados"] += 1
 
-    def _execute_diff(self, diff: ProductDiff) -> Optional[dict]:
-        """
-        Recebe um ProductDiff e executa todas as ações necessárias.
+    # ------------------------------------------------------------------
+    # Execução do diff
+    # ------------------------------------------------------------------
 
-        Retorna dict com as colunas do Excel que precisam ser atualizadas,
-        ou None em caso de erro bloqueante.
-
-        Ordem de execução:
-          1. Produto novo → fluxo completo
-          2. Imagem principal trocada → reprocessar
-          3. Secundárias novas/trocadas → reprocessar cada slot
-          4. Pasta NAS mudou → mover pasta
-          5. Só dados → atualizar JSON
-        """
-        product_id = diff.product_id
-
+    def _execute(self, diff: ProductDiff) -> Optional[dict]:
+        """Executa todas as ações indicadas pelo diff. Retorna updates para o Excel ou None em erro bloqueante."""
         if diff.is_new_product:
             return self._handle_new_product(diff)
 
-        # Produto existente — cada ação é independente e acumulativa
-        excel_updates: dict = {}
+        updates: dict = {}
 
-        # --- Imagem principal trocada ---
         if diff.primary_is_new or diff.primary_is_changed:
-            updates = self._handle_primary_image(diff)
-            if updates is None:
-                return None  # erro bloqueante na imagem principal
-            excel_updates.update(updates)
+            result = self._handle_primary_image(diff)
+            if result is None:
+                return None
+            updates.update(result)
 
-        # --- Secundárias novas ou trocadas ---
         for sec in diff.secondary_changes:
-            updates = self._handle_secondary_image(diff, sec)
-            if updates:
-                excel_updates.update(updates)
-            # Falha numa secundária não bloqueia as demais
+            updates.update(self._handle_secondary_image(diff, sec))
 
-        # --- Secundárias deletadas (Excel vazio + JSON tem caminho) ---
         for sec in diff.secondary_deletions:
             self._handle_secondary_deletion(diff, sec)
 
-        # --- Pasta NAS mudou (colunas organizadoras) ---
         if diff.nas_path_changed:
-            updates = self._handle_nas_path_change(diff)
-            if updates is None:
-                self.logger.error(
-                    f"Id {product_id}: Falha ao mover pasta NAS — "
-                    "JSON e Excel não serão atualizados para este produto."
-                )
+            result = self._handle_nas_path_change(diff)
+            if result is None:
                 return None
-            excel_updates.update(updates)
+            updates.update(result)
 
-        # --- Atualizar JSON com estado final ---
-        # Sempre que há qualquer mudança, reconstruímos o JSON
-        # preservando os caminhos NAS/bucket já gravados
-        self._update_json(diff, excel_updates)
-
-        return excel_updates
-
-    # ======================================================================
-    # Handlers individuais
-    # ======================================================================
+        self._save_json(diff)
+        return updates
 
     # ------------------------------------------------------------------
-    # Produto novo
+    # Handlers
     # ------------------------------------------------------------------
 
     def _handle_new_product(self, diff: ProductDiff) -> Optional[dict]:
-        """
-        Fluxo completo para produto que ainda não tem JSON.
-        Processa imagem principal + todas as secundárias presentes.
-        Gera hash, JSON e retorna atualizações para o Excel.
-        """
-        product_id = diff.product_id
-        row_dict = diff.row_dict
-        excel_updates: dict = {}
+        pid = diff.product_id
+        self.logger.info(f"Id {pid}: cadastro novo.")
 
-        self.logger.info(f"Id {product_id}: Iniciando cadastro de produto novo.")
-
-        # --- Imagem principal ---
         if not diff.primary_excel_value:
-            self.logger.error(
-                f"Id {product_id}: Produto novo sem imagem principal definida. "
-                "Linha ignorada."
-            )
+            self.logger.error(f"Id {pid}: produto novo sem imagem principal — ignorado.")
             return None
 
-        nas_path, bucket_uri = self._process_and_store_image(
-            product_id=product_id,
-            source_filename=diff.primary_excel_value,
-            dest_filename=self.image_service.primary_image_name(product_id),
-            row_dict=row_dict,
-            label="principal",
-        )
+        nas_path = self._process_image(pid, diff.primary_excel_value,
+                                       self.image_service.primary_image_name(pid),
+                                       diff.row_dict, label="principal")
         if nas_path is None:
-            return None  # erro já logado
+            return None
 
-        excel_updates["Chave_Especial"] = self.image_service.generate_hash(row_dict)
-        excel_updates["Caminho_Imagem"] = str(nas_path)
+        updates = {
+            "Chave_Especial": self.image_service.generate_hash(diff.row_dict),
+            "Caminho_Imagem": str(nas_path),
+        }
 
-        # --- Secundárias ---
         for sec in diff.secondaries:
-            if not sec.is_new:
-                continue
-            updates = self._handle_secondary_image(diff, sec)
-            if updates:
-                excel_updates.update(updates)
+            if sec.is_new:
+                updates.update(self._handle_secondary_image(diff, sec))
 
-        # --- Construir model e salvar JSON ---
-        model = self._build_model(diff, excel_updates, existing_json=None)
-        self.json_service.save(model, product_id)
-
-        self.logger.info(
-            f"Id {product_id}: Cadastro novo concluído. "
-            f"Atualizações Excel: {list(excel_updates.keys())}"
-        )
-        return excel_updates
-
-    # ------------------------------------------------------------------
-    # Imagem principal trocada
-    # ------------------------------------------------------------------
+        self._save_json(diff, primary_nas=str(nas_path))
+        return updates
 
     def _handle_primary_image(self, diff: ProductDiff) -> Optional[dict]:
-        """
-        Reprocessa a imagem principal quando ela foi trocada no Excel.
-        Remove o arquivo antigo do NAS (e futuramente do bucket).
-        """
-        product_id = diff.product_id
-        excel_updates: dict = {}
+        pid = diff.product_id
+        self.logger.info(f"Id {pid}: trocando imagem principal → '{diff.primary_excel_value}'")
 
-        self.logger.info(
-            f"Id {product_id}: Reprocessando imagem principal. "
-            f"Arquivo novo: '{diff.primary_excel_value}'"
-        )
-
-        # Remover imagem antiga do NAS
         if diff.primary_json_nas_path:
-            removed = self.nas_service.delete_image(diff.primary_json_nas_path)
-            self.logger.info(
-                f"Id {product_id}: Imagem principal antiga removida do NAS: "
-                f"{diff.primary_json_nas_path} — ok={removed}"
-            )
-        # Remover do bucket (comentado até ativar GCS)
-        # if diff.primary_json_bucket_uri:
-        #     filename = Path(diff.primary_json_bucket_uri).name
-        #     self.storage_service.delete_image(filename)
+            self.nas_service.delete_image(diff.primary_json_nas_path)
+        # GCS: self.storage_service.delete_image(Path(diff.primary_json_bucket_uri).name)
 
-        # Processar nova imagem
-        nas_path, bucket_uri = self._process_and_store_image(
-            product_id=product_id,
-            source_filename=diff.primary_excel_value,
-            dest_filename=self.image_service.primary_image_name(product_id),
-            row_dict=diff.row_dict,
-            label="principal",
-        )
+        nas_path = self._process_image(pid, diff.primary_excel_value,
+                                       self.image_service.primary_image_name(pid),
+                                       diff.row_dict, label="principal")
         if nas_path is None:
             return None
 
-        excel_updates["Caminho_Imagem"] = str(nas_path)
-        # excel_updates["Caminho_Bucket_Principal"] = bucket_uri  # quando ativar GCS
+        return {"Caminho_Imagem": str(nas_path)}
 
-        self.logger.info(
-            f"Id {product_id}: Imagem principal atualizada → NAS: {nas_path}"
-        )
-        return excel_updates
-
-    # ------------------------------------------------------------------
-    # Imagem secundária nova ou trocada
-    # ------------------------------------------------------------------
-
-    def _handle_secondary_image(
-        self, diff: ProductDiff, sec: SecondaryImageDiff
-    ) -> dict:
-        """
-        Processa ou reprocessa um slot de imagem secundária.
-        Remove o arquivo antigo do NAS se houver troca.
-        Retorna as colunas do Excel a atualizar (coluna SecundariaX → caminho NAS).
-        """
-        product_id = diff.product_id
+    def _handle_secondary_image(self, diff: ProductDiff, sec: SecondaryImageDiff) -> dict:
+        pid = diff.product_id
         slot = sec.slot
-        excel_col = SECONDARY_EXCEL_COLS[slot]
-        excel_updates: dict = {}
 
-        action = "nova" if sec.is_new else "trocada"
-        self.logger.info(
-            f"Id {product_id}: Imagem secundária slot {slot} {action}. "
-            f"Arquivo: '{sec.excel_value}'"
-        )
-
-        # Remover imagem antiga do NAS se é troca
         if sec.is_changed and sec.json_nas_path:
-            removed = self.nas_service.delete_image(sec.json_nas_path)
-            self.logger.info(
-                f"Id {product_id}: Secundária {slot} antiga removida do NAS: "
-                f"{sec.json_nas_path} — ok={removed}"
-            )
-        # Remover do bucket se for troca (comentado até ativar GCS)
-        # if sec.is_changed and sec.json_bucket_uri:
-        #     filename = Path(sec.json_bucket_uri).name
-        #     self.storage_service.delete_image(filename)
+            self.nas_service.delete_image(sec.json_nas_path)
+            # GCS: self.storage_service.delete_image(Path(sec.json_bucket_uri).name)
 
-        # Processar nova imagem (índice baseado em 0 para sufixo alfabético)
-        dest_filename = self.image_service.secondary_image_name(product_id, slot - 1)
-
-        nas_path, bucket_uri = self._process_and_store_image(
-            product_id=product_id,
-            source_filename=sec.excel_value,
-            dest_filename=dest_filename,
-            row_dict=diff.row_dict,
-            label=f"secundária slot {slot}",
+        nas_path = self._process_image(
+            pid, sec.excel_value,
+            self.image_service.secondary_image_name(pid, slot - 1),
+            diff.row_dict, label=f"secundária {slot}"
         )
 
         if nas_path is None:
-            self.logger.warning(
-                f"Id {product_id}: Falha ao processar secundária slot {slot}. "
-                "Excel não será atualizado para este slot."
-            )
+            self.logger.warning(f"Id {pid}: falha na secundária slot {slot} — slot ignorado.")
             return {}
 
-        # Registrar NAS path no cache para _build_model preservar
-        self._register_secondary_nas(product_id, slot, nas_path)
+        self._secondary_cache[(pid, slot)] = str(nas_path)
+        return {SECONDARY_EXCEL_COLS[slot]: str(nas_path)}
 
-        # Marcar slot como processado no Excel
-        excel_updates[excel_col] = str(nas_path)
+    def _handle_secondary_deletion(self, diff: ProductDiff, sec: SecondaryImageDiff) -> None:
+        pid = diff.product_id
+        self.logger.info(f"Id {pid}: deletando secundária slot {sec.slot}.")
 
-        self.logger.info(
-            f"Id {product_id}: Secundária slot {slot} processada → NAS: {nas_path}"
-        )
-        return excel_updates
-
-    # ------------------------------------------------------------------
-    # Deleção de imagem secundária
-    # ------------------------------------------------------------------
-
-    def _handle_secondary_deletion(
-        self, diff: ProductDiff, sec: SecondaryImageDiff
-    ) -> None:
-        """
-        Remove um slot de imagem secundária que foi apagado no Excel.
-        Deleta do NAS, do bucket (quando ativo) e limpa os campos no JSON.
-        Não retorna atualizações para o Excel pois o campo já está vazio.
-        """
-        product_id = diff.product_id
-        slot = sec.slot
-
-        self.logger.info(
-            f"Id {product_id}: Secundária slot {slot} removida no Excel — "
-            f"iniciando limpeza. NAS='{sec.json_nas_path}'"
-        )
-
-        # Remover do NAS
         if sec.json_nas_path:
-            removed = self.nas_service.delete_image(sec.json_nas_path)
-            self.logger.info(
-                f"Id {product_id}: Secundária slot {slot} removida do NAS: "
-                f"'{sec.json_nas_path}' — ok={removed}"
-            )
-        else:
-            self.logger.warning(
-                f"Id {product_id}: Secundária slot {slot} — "
-                "nenhum caminho NAS no JSON para remover."
-            )
+            self.nas_service.delete_image(sec.json_nas_path)
+        # GCS: if sec.json_bucket_uri: self.storage_service.delete_image(...)
 
-        # Remover do bucket (comentado até ativar GCS)
-        # if sec.json_bucket_uri:
-        #     filename = Path(sec.json_bucket_uri).name
-        #     self.storage_service.delete_image(filename)
-        #     self.logger.info(
-        #         f"Id {product_id}: Secundária slot {slot} removida do bucket: "
-        #         f"'{sec.json_bucket_uri}'"
-        #     )
-
-        # Limpar os campos do slot no JSON
-        # Feito via _register_secondary_nas com None, que será persistido em _update_json
-        self._register_secondary_deletion(product_id, slot)
-        self.logger.info(
-            f"Id {product_id}: Secundária slot {slot} marcada para limpeza no JSON."
-        )
-
-    # ------------------------------------------------------------------
-    # Mudança de caminho NAS (colunas organizadoras)
-    # ------------------------------------------------------------------
+        self._secondary_cache[(pid, sec.slot)] = None  # sentinela: limpar no JSON
 
     def _handle_nas_path_change(self, diff: ProductDiff) -> Optional[dict]:
-        """
-        Move a pasta do produto no NAS quando colunas organizadoras mudaram.
-        Atualiza o Caminho_Imagem e caminhos das secundárias no JSON.
-        O GCS não precisa de ação pois a estrutura é flat (images/{filename}).
-        """
-        product_id = diff.product_id
-        row_dict = diff.row_dict
-        excel_updates: dict = {}
+        pid = diff.product_id
+        self.logger.info(f"Id {pid}: movendo pasta NAS.")
 
-        self.logger.info(
-            f"Id {product_id}: Colunas organizadoras NAS mudaram — iniciando movimentação."
-        )
+        new_path = self.nas_service.build_product_path(diff.row_dict, pid)
+        current_path = self.nas_service.find_product_folder(pid)
 
-        expected_path = self.nas_service.build_product_path(row_dict, product_id)
-        current_path = self.nas_service.find_product_folder(product_id)
+        if current_path is not None:
+            if not self.nas_service.move_product_folder(current_path, new_path):
+                self.logger.error(f"Id {pid}: falha ao mover pasta NAS.")
+                return None
 
-        if current_path is None:
-            self.logger.warning(
-                f"Id {product_id}: Pasta atual no NAS não encontrada. "
-                "Nada a mover — apenas atualizando JSON com novo caminho esperado."
-            )
-            # Atualiza o caminho esperado no JSON mesmo sem mover
-            primary_img_name = self.image_service.primary_image_name(product_id)
-            excel_updates["Caminho_Imagem"] = str(expected_path / primary_img_name)
-            return excel_updates
+        primary_name = self.image_service.primary_image_name(pid)
+        return {"Caminho_Imagem": str(new_path / primary_name)}
 
-        move_ok = self.nas_service.move_product_folder(current_path, expected_path)
-        if not move_ok:
-            self.logger.error(
-                f"Id {product_id}: Falha ao mover pasta NAS de '{current_path}' "
-                f"para '{expected_path}'."
-            )
-            return None
+    # ------------------------------------------------------------------
+    # JSON
+    # ------------------------------------------------------------------
 
-        # Atualiza Caminho_Imagem com novo path (GCS não muda — flat)
-        primary_img_name = self.image_service.primary_image_name(product_id)
-        excel_updates["Caminho_Imagem"] = str(expected_path / primary_img_name)
+    def _save_json(self, diff: ProductDiff, primary_nas: Optional[str] = None) -> None:
+        """Constrói e salva o JSON do produto com o estado final."""
+        pid = diff.product_id
+        existing = self.json_service.load(pid) or {}
 
-        self.logger.info(
-            f"Id {product_id}: Pasta movida com sucesso. "
-            f"Novo Caminho_Imagem: {excel_updates['Caminho_Imagem']}"
-        )
-        return excel_updates
+        model = self.spreadsheet_service.row_to_model(diff.row_dict)
 
-    # ======================================================================
-    # Construção do JSON final
-    # ======================================================================
-
-    def _update_json(self, diff: ProductDiff, excel_updates: dict) -> None:
-        """
-        Reconstrói e salva o JSON do produto após todas as ações do diff.
-
-        Estratégia:
-          - Parte do JSON existente (para preservar campos que o Excel não tem,
-            como caminhos NAS/bucket das secundárias não alteradas)
-          - Sobrescreve com os dados atuais do Excel
-          - Sobrescreve com os novos caminhos gerados nesta execução (excel_updates)
-        """
-        product_id = diff.product_id
-        existing_json = self.json_service.load(product_id) or {}
-
-        # Construir model base a partir dos dados do Excel
-        model = self._build_model(diff, excel_updates, existing_json=existing_json)
-
-        self.json_service.save(model, product_id)
-        self.logger.info(
-            f"Id {product_id}: JSON atualizado. "
-            f"Campos de dados alterados: {diff.changed_data_fields or '(nenhum)'}"
-        )
-
-    def _build_model(
-        self,
-        diff: ProductDiff,
-        excel_updates: dict,
-        existing_json: Optional[dict],
-    ) -> ProductModel:
-        """
-        Constrói um ProductModel completo combinando:
-          1. Dados do produto vindos do Excel (via row_dict + COLUMN_MAP)
-          2. Caminhos NAS/bucket já salvos no JSON existente (preservados)
-          3. Novos caminhos gerados nesta execução (excel_updates internos)
-        """
-        product_id = diff.product_id
-        row_dict = diff.row_dict
-        existing = existing_json or {}
-
-        model = self.spreadsheet_service.row_to_model(row_dict)
-
-        # --- Imagem principal ---
-        # Prioridade: novo caminho gerado agora > caminho do JSON existente
-        new_primary_nas = excel_updates.get("Caminho_Imagem")
-        model.caminho_imagem = new_primary_nas or existing.get("caminho_imagem")
+        # Imagem principal: novo caminho > existente no JSON
+        model.caminho_imagem = primary_nas or existing.get("caminho_imagem")
         model.caminho_bucket_principal = existing.get("caminho_bucket_principal")
-        # model.caminho_bucket_principal = (
-        #     excel_updates.get("Caminho_Bucket_Principal")
-        #     or existing.get("caminho_bucket_principal")
-        # )
 
-        # --- Secundárias ---
+        # Secundárias: cache desta execução > existente no JSON
+        # Cache ausente = não tocado (preserva); None = deletado (limpa); str = novo
+        _ABSENT = object()
         for slot in SECONDARY_SLOTS:
-            excel_col = SECONDARY_EXCEL_COLS[slot]
-            nas_field = SECONDARY_NAS_FIELDS[slot]
-            bucket_field = SECONDARY_BUCKET_FIELDS[slot]
-
-            # Distingue três estados no cache:
-            #   _SENTINEL → slot não foi tocado nesta execução → preserva JSON
-            #   None      → slot foi deletado → limpa campos
-            #   string    → slot foi processado → usa novo caminho
-            _SENTINEL = object()
-            cached = self._secondary_nas_cache.get((product_id, slot), _SENTINEL)
-
-            if cached is _SENTINEL:
-                final_nas = existing.get(nas_field)
-                final_bucket = existing.get(bucket_field)
+            cached = self._secondary_cache.get((pid, slot), _ABSENT)
+            if cached is _ABSENT:
+                nas = existing.get(SECONDARY_NAS_FIELDS[slot])
+                bucket = existing.get(SECONDARY_BUCKET_FIELDS[slot])
             elif cached is None:
-                # Deletado: limpa ambos os campos no JSON
-                final_nas = None
-                final_bucket = None
-                self.logger.debug(
-                    f"Id {product_id}: Slot secundária {slot} limpo no JSON (deletado)."
-                )
+                nas, bucket = None, None
             else:
-                # Processado nesta execução: novo caminho NAS
-                final_nas = cached
-                final_bucket = existing.get(bucket_field)  # preserva bucket até ativar GCS
+                nas = cached
+                bucket = existing.get(SECONDARY_BUCKET_FIELDS[slot])
 
-            setattr(model, nas_field, final_nas)
-            setattr(model, bucket_field, final_bucket)
+            setattr(model, SECONDARY_NAS_FIELDS[slot], nas)
+            setattr(model, SECONDARY_BUCKET_FIELDS[slot], bucket)
 
-            self.logger.debug(
-                f"Id {product_id}: Slot secundária {slot} no JSON — "
-                f"NAS: {final_nas} | Bucket: {final_bucket}"
-            )
+        self.json_service.save(model, pid)
+        self.logger.info(f"Id {pid}: JSON salvo.")
 
-        return model
+    # ------------------------------------------------------------------
+    # Processamento de imagem
+    # ------------------------------------------------------------------
 
-    # ======================================================================
-    # Processamento de imagem (NAS + GCS)
-    # ======================================================================
-
-    def _process_and_store_image(
-        self,
-        product_id: int,
-        source_filename: str,
-        dest_filename: str,
-        row_dict: dict,
-        label: str,
-    ) -> tuple[Optional[Path], Optional[str]]:
+    def _process_image(
+        self, product_id: int, source_filename: str,
+        dest_filename: str, row_dict: dict, label: str
+    ) -> Optional[Path]:
         """
-        Pipeline completo para uma imagem:
-          1. Valida extensão
-          2. Verifica existência na landing
-          3. Redimensiona e converte para JPG (em temp dir)
-          4. Salva no NAS
-          5. (Futuro) Upload para GCS
-
-        Retorna (nas_path, bucket_uri) ou (None, None) em caso de erro.
-        Registra o filename original para limpeza da landing.
+        Pipeline: valida → landing → resize/convert → NAS.
+        Retorna o Path NAS em sucesso ou None em falha (já logada).
         """
-        self.logger.info(
-            f"Id {product_id}: [{label}] Processando imagem '{source_filename}' → '{dest_filename}'"
-        )
+        self.logger.info(f"Id {product_id}: [{label}] '{source_filename}' → '{dest_filename}'")
 
-        # 1. Verificar na landing
         landing_path = self.image_service.file_exists_in_landing(source_filename)
         if landing_path is None:
-            self.logger.error(
-                f"Id {product_id}: [{label}] Arquivo '{source_filename}' não encontrado "
-                "na landing. Processamento interrompido para esta imagem."
-            )
-            return None, None
+            self.logger.error(f"Id {product_id}: [{label}] '{source_filename}' não encontrado na landing.")
+            return None
 
-        # 2. Processar (resize + conversão JPG)
         temp_dir = Path(tempfile.mkdtemp())
-        temp_img = temp_dir / dest_filename
-
         try:
+            temp_img = temp_dir / dest_filename
             if not self.image_service.process_image(landing_path, temp_img):
-                self.logger.error(
-                    f"Id {product_id}: [{label}] Falha no processamento da imagem "
-                    f"'{source_filename}'."
-                )
-                return None, None
+                self.logger.error(f"Id {product_id}: [{label}] falha ao processar imagem.")
+                return None
 
-            # 3. Salvar no NAS
             nas_folder = self.nas_service.build_product_path(row_dict, product_id)
-            nas_result = self.nas_service.save_image(temp_img, nas_folder, dest_filename)
-            if nas_result is None:
-                self.logger.error(
-                    f"Id {product_id}: [{label}] Falha ao salvar '{dest_filename}' no NAS."
-                )
-                return None, None
+            nas_path = self.nas_service.save_image(temp_img, nas_folder, dest_filename)
+            if nas_path is None:
+                self.logger.error(f"Id {product_id}: [{label}] falha ao salvar no NAS.")
+                return None
 
-            # 4. Upload GCS (comentado até ativar)
-            # bucket_uri = self.storage_service.upload_image(temp_img, dest_filename)
-            # if bucket_uri is None:
-            #     self.logger.warning(
-            #         f"Id {product_id}: [{label}] Upload GCS falhou. "
-            #         "Continuando apenas com NAS."
-            #     )
-            bucket_uri = None
+            # GCS: self.storage_service.upload_image(temp_img, dest_filename)
 
-            # Registrar para limpeza da landing
             self._filenames_to_clean.append(source_filename)
-            self.logger.info(
-                f"Id {product_id}: [{label}] Imagem armazenada com sucesso. "
-                f"NAS: {nas_result}"
-            )
-            return nas_result, bucket_uri
+            self.logger.info(f"Id {product_id}: [{label}] salvo em {nas_path}")
+            return nas_path
 
         finally:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-    # ======================================================================
-    # Cache de caminhos de secundárias (para _build_model)
-    # ======================================================================
-
-    @property
-    def _secondary_nas_cache(self) -> dict:
-        """Cache em memória: (product_id, slot) → nas_path."""
-        if not hasattr(self, "_sec_nas_cache"):
-            self._sec_nas_cache = {}
-        return self._sec_nas_cache
-
-    def _register_secondary_nas(
-        self, product_id: int, slot: int, nas_path: Path
-    ) -> None:
-        """Registra o NAS path de uma secundária recém-processada."""
-        self._secondary_nas_cache[(product_id, slot)] = str(nas_path)
-        self.logger.debug(
-            f"Id {product_id}: Cache secundária slot {slot} → {nas_path}"
-        )
-
-    def _register_secondary_deletion(self, product_id: int, slot: int) -> None:
-        """
-        Marca um slot como deletado no cache usando None como sentinela.
-        _build_model ao encontrar None limpa os campos NAS e bucket no JSON.
-        """
-        self._secondary_nas_cache[(product_id, slot)] = None
-        self.logger.debug(
-            f"Id {product_id}: Cache secundária slot {slot} → None (deletado)"
-        )
-
-    # ======================================================================
+    # ------------------------------------------------------------------
     # Limpeza da landing
-    # ======================================================================
+    # ------------------------------------------------------------------
 
     def _cleanup_landing(self) -> int:
-        """
-        Remove da landing apenas os arquivos que foram processados nesta execução.
-        Arquivos presentes na landing mas ausentes da planilha são mantidos.
-        Retorna o número de arquivos removidos.
-        """
         count = 0
-        self.logger.info(
-            f"[Cleanup] Iniciando limpeza da landing. "
-            f"Arquivos a remover: {len(set(self._filenames_to_clean))}"
-        )
         for filename in set(self._filenames_to_clean):
             path = settings.general.landing_path / filename
             try:
                 if path.exists():
                     path.unlink()
-                    self.logger.info(f"[Cleanup] Removido da landing: {filename}")
                     count += 1
-                else:
-                    self.logger.debug(
-                        f"[Cleanup] Arquivo não encontrado na landing "
-                        f"(já removido?): {filename}"
-                    )
             except Exception as exc:
-                self.logger.error(
-                    f"[Cleanup] Erro ao remover '{filename}': {exc}", exc_info=True
-                )
+                self.logger.error(f"[Cleanup] Erro ao remover '{filename}': {exc}")
         self.logger.info(f"[Cleanup] {count} arquivo(s) removido(s) da landing.")
         return count
