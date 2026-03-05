@@ -10,3 +10,4 @@ pillow==10.4.0
 google-cloud-storage==2.18.2
 
 requests==2.32.3
+reflex==0.8.27
