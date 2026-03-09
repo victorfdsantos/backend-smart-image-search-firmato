@@ -1,67 +1,62 @@
-import logging
+# src/controllers/catalog_controller.py
+import shutil
 from pathlib import Path
+
+from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi.responses import JSONResponse
 
 from services.catalog_service import CatalogService
 from utils.logger import setup_logger
 
+_TEMP_UPLOAD_DIR = Path("./tmp_uploads")
+_TEMP_UPLOAD_DIR.mkdir(exist_ok=True)
 
-class CatalogController:
-    """
-    Controller responsável por receber a requisição de cadastro,
-    validar os inputs e acionar o CatalogService.
-    """
+router = APIRouter(prefix="/catalog", tags=["Catalog"])
 
-    ENDPOINT_NAME = "catalog_register"
+ENDPOINT_NAME = "catalog_register"
 
-    def __init__(self):
-        self.logger: logging.Logger = None
 
-    # ------------------------------------------------------------------
-    # Ação principal
-    # ------------------------------------------------------------------
+@router.post(
+    "/register",
+    summary="Cadastrar produtos a partir de planilha",
+    description=(
+        "Recebe um arquivo .xlsx com o catálogo de produtos, executa o fluxo de "
+        "processamento de imagens (redimensionamento, conversão, hash, NAS e GCS) e "
+        "atualiza os dados da planilha. Retorna estatísticas da execução."
+    ),
+    response_description="Estatísticas do processamento",
+)
+async def register_catalog(file: UploadFile = File(...)) -> JSONResponse:
+    if not file.filename.endswith((".xlsx", ".xlsm")):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Formato inválido: '{file.filename}'. Apenas .xlsx ou .xlsm são aceitos.",
+        )
 
-    def register_from_spreadsheet(self, xlsx_path: str) -> dict:
-        """
-        Ponto de entrada principal do processo de cadastro.
+    logger = setup_logger(ENDPOINT_NAME)
+    logger.info(f"Planilha recebida: {file.filename}")
 
-        Args:
-            xlsx_path: Caminho para o arquivo .xlsx recebido.
+    temp_path = _TEMP_UPLOAD_DIR / file.filename
+    try:
+        with temp_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
 
-        Returns:
-            Dicionário com resultado da execução (stats + status).
-        """
-        self.logger = setup_logger(self.ENDPOINT_NAME)
-        self.logger.info(f"CatalogController.register_from_spreadsheet iniciado.")
-        self.logger.info(f"Planilha recebida: {xlsx_path}")
+        path = Path(temp_path)
+        if not path.exists():
+            raise HTTPException(status_code=422, detail=f"Arquivo não encontrado após upload: {temp_path}")
 
-        try:
-            # Validação do arquivo
-            path = Path(xlsx_path)
-            if not path.exists():
-                msg = f"Arquivo não encontrado: {xlsx_path}"
-                self.logger.error(msg)
-                return {"status": "error", "message": msg}
+        service = CatalogService(logger)
+        stats = service.process_spreadsheet(path)
 
-            if path.suffix.lower() not in (".xlsx", ".xlsm"):
-                msg = f"Formato de arquivo inválido: '{path.suffix}'. Esperado .xlsx ou .xlsm."
-                self.logger.error(msg)
-                return {"status": "error", "message": msg}
+        logger.info("Processamento finalizado com sucesso.")
+        return JSONResponse(content={"status": "success", "stats": stats}, status_code=200)
 
-            # Executar serviço
-            service = CatalogService(self.logger)
-            stats = service.process_spreadsheet(path)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error(f"Erro inesperado: {exc}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(exc))
 
-            self.logger.info("CatalogController: Processamento finalizado com sucesso.")
-            return {
-                "status": "success",
-                "stats": stats,
-            }
-
-        except Exception as exc:
-            self.logger.error(
-                f"Erro inesperado no CatalogController: {exc}", exc_info=True
-            )
-            return {
-                "status": "error",
-                "message": str(exc),
-            }
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()

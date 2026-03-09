@@ -29,6 +29,7 @@ class GeneralSettings:
     landing_path: Path = _resolve(_cfg.get("general", "landing_path"))
     data_path: Path = _resolve(_cfg.get("general", "data_path"))
     logs_path: Path = _resolve(_cfg.get("general", "logs_path"))
+    tmp_images_path: Path = _resolve(_cfg.get("general", "tmp_images_path"))
 
 
 class ImageSettings:
@@ -58,12 +59,17 @@ class HashSettings:
     ]
 
 
+class EmbeddingsSettings:
+    npy_path: Path = _resolve(_cfg.get("embeddings", "npy_path"))
+    metadata_path: Path = _resolve(_cfg.get("embeddings", "metadata_path"))
+
+
 class Settings:
     general = GeneralSettings()
     image = ImageSettings()
     nas = NasSettings()
     gcs = GcsSettings()
     hash = HashSettings()
-
+    embeddings = EmbeddingsSettings()
 
 settings = Settings()

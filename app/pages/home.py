@@ -1,19 +1,17 @@
 import reflex as rx
-from app.state import State
+from app.state import State, ProductSummary
 from app.styles import home as styles
+
 
 def topbar():
     return rx.hstack(
-        # Logo que já contém o texto
         rx.image(
             src="/logo_cinza.png",
-            height="40px",  # Ajuste a altura conforme necessário
+            height="40px",
             width="auto",
             alt="Firmato",
         ),
-        
         rx.spacer(),
-        
         rx.hstack(
             rx.button(
                 "Importar Dados",
@@ -27,6 +25,7 @@ def topbar():
         ),
         style=styles.topbar_style,
     )
+
 
 def search_panel():
     return rx.vstack(
@@ -80,10 +79,10 @@ def search_panel():
             placeholder="Digite sua busca...",
             value=State.search_text,
             on_change=State.set_search_text,
-            border=f"1px solid {styles.COLORS['border_dark']}", 
+            border=f"1px solid {styles.COLORS['border_dark']}",
             border_radius="2px",
             background_color=styles.COLORS["surface"],
-            color=styles.COLORS["text_primary"], 
+            color=styles.COLORS["text_primary"],
             placeholder_color=styles.COLORS["text_primary"],
             padding="6px 16px",
             font_family="Inter, sans-serif",
@@ -91,7 +90,7 @@ def search_panel():
             _focus={
                 "border_color": styles.COLORS["accent"],
                 "border_width": "1px",
-                "box_shadow": f"0 0 0 2px {styles.COLORS['accent_light']}20",  # Sombra sutil no foco
+                "box_shadow": f"0 0 0 2px {styles.COLORS['accent_light']}20",
                 "outline": "none",
             },
             _hover={
@@ -112,43 +111,24 @@ def search_panel():
         width="100%",
     )
 
-def image_card(img):
+def image_card(product: ProductSummary):
     return rx.box(
-        rx.vstack(
-            rx.image(
-                src=img,
-                width="100%",
-                height="240px",
-                object_fit="cover",
-            ),
-            rx.box(
-                rx.hstack(
-                    rx.icon(tag="image", size=14, color=styles.COLORS["accent"]),
-                    rx.text(
-                        "Visualizar",
-                        style=styles.get_base_text_style("12px", color=styles.COLORS["text_secondary"]),
-                    ),
-                    spacing="1",
-                ),
-                padding="12px",
-                border_top=f"1px solid {styles.COLORS['border']}",
-                width="100%",
-            ),
-            spacing="0",
+        rx.image(
+            src=product.imagem_url,
+            width="100%",
+            height="240px",
+            object_fit="cover",
         ),
         style=styles.image_card_style,
-        on_click=lambda: State.select_image(img),  # Usando o método do state
+        on_click=State.select_image(product.imagem_url),
     )
 
 def image_grid():
     return rx.cond(
-        State.paginated_images.length() > 0,  # Usando .length() para Vars
+        State.products.length() > 0,
         rx.grid(
-            rx.foreach(
-                State.paginated_images,
-                image_card,
-            ),
-            columns="2",
+            rx.foreach(State.products, image_card),
+            columns="3",
             spacing="4",
             width="100%",
         ),
@@ -156,7 +136,7 @@ def image_grid():
             rx.vstack(
                 rx.icon(tag="image", size=48, color=styles.COLORS["border_dark"]),
                 rx.text(
-                    "Nenhuma imagem encontrada",
+                    "Nenhum produto encontrado",
                     style=styles.get_base_text_style("16px", color=styles.COLORS["text_secondary"]),
                 ),
                 spacing="4",
@@ -165,6 +145,8 @@ def image_grid():
             width="100%",
         ),
     )
+
+
 
 def pagination_controls():
     return rx.hstack(
@@ -198,6 +180,7 @@ def pagination_controls():
         justify="center",
         width="100%",
     )
+
 
 def preview_panel():
     return rx.vstack(
@@ -288,7 +271,7 @@ def left_panel():
             ),
             rx.spacer(),
             rx.text(
-                f"{State.total_images} imagens",  # Usando a var total_images
+                State.total.to_string() + " produtos",
                 style=styles.get_base_text_style("14px", color=styles.COLORS["text_secondary"]),
             ),
             width="100%",
@@ -299,6 +282,7 @@ def left_panel():
         width="100%",
         spacing="5",
     )
+
 
 def home():
     return rx.vstack(
@@ -322,4 +306,5 @@ def home():
         background_color=styles.COLORS["background"],
         min_height="100vh",
         spacing="0",
+        on_mount=State.on_load,
     )
