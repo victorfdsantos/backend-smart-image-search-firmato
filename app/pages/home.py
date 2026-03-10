@@ -45,35 +45,55 @@ def search_panel():
         ),
         rx.upload(
             rx.vstack(
-                rx.button(
-                    rx.hstack(
-                        rx.icon(tag="upload", size=16),
-                        rx.text("Escolher imagem"),
-                        spacing="2",
+                rx.cond(
+                    State.uploaded_image != "",
+                    # mostra preview da imagem upada
+                    rx.box(
+                        rx.image(
+                            src=State.uploaded_image,
+                            width="100%",
+                            height="120px",
+                            object_fit="contain",
+                        ),
+                        rx.button(
+                            "✕ Remover",
+                            on_click=State.clear_image,
+                            size="1",
+                            variant="ghost",
+                            color=styles.COLORS["text_secondary"],
+                        ),
+                        width="100%",
+                        position="relative",
                     ),
-                    style=styles.solid_button_style,
-                    width="100%",
+                    # estado vazio
+                    rx.vstack(
+                        rx.button(
+                            rx.hstack(
+                                rx.icon(tag="upload", size=16),
+                                rx.text("Escolher imagem"),
+                                spacing="2",
+                            ),
+                            style=styles.solid_button_style,
+                            width="100%",
+                        ),
+                        rx.text(
+                            "ou arraste e solte",
+                            style=styles.get_base_text_style("12px", color=styles.COLORS["text_secondary"]),
+                        ),
+                        spacing="2",
+                        width="100%",
+                        padding="12px",
+                        align="center",
+                    ),
                 ),
-                rx.text(
-                    "ou arraste e solte",
-                    style=styles.get_base_text_style("12px", color=styles.COLORS["text_secondary"]),
-                ),
-                spacing="2",
-                width="100%",
-                padding="12px",
-                align="center",
             ),
+            on_drop=State.handle_upload,
+            accept={"image/jpeg": [".jpg", ".jpeg"], "image/png": [".png"], "image/webp": [".webp"]},
             border=f"1px dashed {styles.COLORS['border_dark']}",
             border_radius="2px",
             background_color=styles.COLORS["background"],
             padding="0",
             width="100%",
-            max_width="100%",
-            height="auto",
-            _hover={
-                "border_color": styles.COLORS["accent"],
-                "background_color": f"{styles.COLORS['accent_light']}10",
-            },
         ),
         rx.input(
             placeholder="Digite sua busca...",

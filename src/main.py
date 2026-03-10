@@ -12,6 +12,7 @@ from config.settings import settings
 
 from controllers.catalog_controller import router as catalog_router
 from controllers.product_controller import router as product_router
+from controllers.search_controller import router as search_router
 from services.startup_service import StartupService
 
 
@@ -42,6 +43,7 @@ app.mount(
 
 app.include_router(catalog_router)
 app.include_router(product_router)
+app.include_router(search_router)
 
 @app.get("/health", tags=["System"], summary="Health check")
 async def health_check() -> JSONResponse:
