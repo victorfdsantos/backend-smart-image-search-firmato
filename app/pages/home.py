@@ -118,6 +118,7 @@ def image_card(product: ProductSummary):
             width="100%",
             height="240px",
             object_fit="cover",
+            loading="lazy",
         ),
         style=styles.image_card_style,
         on_click=State.select_image(product.imagem_url),

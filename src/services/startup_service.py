@@ -6,8 +6,11 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from PIL import Image
 
 from config.settings import settings
+
+_THUMBNAIL_SIZE = (400, 400)
 
 
 class StartupService:
@@ -64,14 +67,13 @@ class StartupService:
                 self.logger.warning(f"[Startup] Falha ao carregar metadata: {exc}")
 
     # ------------------------------------------------------------------
-    # tmp_images — flat copy de output/
+    # tmp_images — thumbnails 400x400 mantendo proporção
     # ------------------------------------------------------------------
 
     def _rebuild_tmp_images(self) -> None:
         tmp_dir = settings.general.tmp_images_path
         nas_base = settings.nas.base_path
 
-        # Limpa e recria o diretório
         if tmp_dir.exists():
             shutil.rmtree(tmp_dir)
         tmp_dir.mkdir(parents=True)
@@ -82,7 +84,7 @@ class StartupService:
             return
 
         copied = 0
-        conflicts: dict[str, Path] = {}  # filename → primeiro path encontrado
+        conflicts: dict[str, Path] = {}
 
         for img_path in nas_base.rglob("*.jpg"):
             filename = img_path.name
@@ -94,13 +96,21 @@ class StartupService:
                 continue
 
             try:
-                shutil.copy2(img_path, tmp_dir / filename)
+                with Image.open(img_path) as img:
+                    img = img.convert("RGB")
+                    img.thumbnail(_THUMBNAIL_SIZE, Image.LANCZOS)
+                    img.save(tmp_dir / filename, "JPEG", quality=82, optimize=True)
+
                 conflicts[filename] = img_path
                 copied += 1
             except Exception as exc:
-                self.logger.warning(f"[Startup] Falha ao copiar '{img_path}': {exc}")
+                self.logger.warning(f"[Startup] Falha ao processar '{img_path}': {exc}")
 
-        self.logger.info(f"[Startup] {copied} imagem(ns) copiada(s) para tmp_images.")
+        self.logger.info(f"[Startup] {copied} thumbnail(s) gerada(s) em tmp_images.")
+
+    # ------------------------------------------------------------------
+    # CLIP
+    # ------------------------------------------------------------------
 
     def _load_clip_model(self, app_state: dict) -> None:
         """Carrega o modelo CLIP para encoding de queries em runtime."""
@@ -112,7 +122,9 @@ class StartupService:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
             app_state["clip_model"] = CLIPModel.from_pretrained(model_name).to(device).eval()
-            app_state["clip_processor"] = CLIPProcessor.from_pretrained(model_name)
+            app_state["clip_processor"] = CLIPProcessor.from_pretrained(
+                model_name, clean_up_tokenization_spaces=True
+            )
             app_state["clip_device"] = device
 
             self.logger.info(f"[Startup] CLIP carregado: {model_name} | device={device}")

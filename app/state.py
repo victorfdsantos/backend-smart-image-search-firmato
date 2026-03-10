@@ -12,7 +12,7 @@ class State(rx.State):
     search_text: str = ""        # ← var declarada
     selected_image: str = "" 
     page: int = 1
-    page_size: int = 20
+    page_size: int = 12
     total: int = 0
     total_pages: int = 1
     is_loading: bool = False
@@ -25,12 +25,12 @@ class State(rx.State):
         self.search_text = text
         self.page = 1
 
-    def on_load(self):
-        self.load_products()
+    async def on_load(self):
+        await self.load_products()
 
-    def load_products(self):
+    async def load_products(self):
         self.is_loading = True
-        data = get_products(page=self.page, page_size=self.page_size)
+        data = await get_products(page=self.page, page_size=self.page_size)
         self.total = data.get("total", 0)
         self.total_pages = data.get("total_pages", 1)
         self.products = [
@@ -42,12 +42,12 @@ class State(rx.State):
         ]
         self.is_loading = False
 
-    def next_page(self):
+    async def next_page(self):
         if self.page < self.total_pages:
             self.page += 1
-            self.load_products()
+            await self.load_products()
 
-    def prev_page(self):
+    async def prev_page(self):
         if self.page > 1:
             self.page -= 1
-            self.load_products()
+            await self.load_products()

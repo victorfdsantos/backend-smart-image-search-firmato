@@ -3,7 +3,7 @@
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 
 from config.settings import settings
@@ -46,14 +46,8 @@ async def get_product(product_id: int) -> JSONResponse:
     return JSONResponse(content=product)
 
 
-@router.get(
-    "/images/{filename}",
-    summary="Servir imagem da galeria",
-    description="Serve imagens diretamente do tmp_images/ (flat).",
-    tags=["Images"],
-)
-async def get_image(filename: str) -> FileResponse:
-    # Sanitização básica — evita path traversal
+@router.get("/images/{filename}", tags=["Images"])
+async def get_image(filename: str, response: Response) -> FileResponse:
     if "/" in filename or "\\" in filename or ".." in filename:
         raise HTTPException(status_code=400, detail="Nome de arquivo inválido.")
 
@@ -61,4 +55,11 @@ async def get_image(filename: str) -> FileResponse:
     if not image_path.exists():
         raise HTTPException(status_code=404, detail=f"Imagem '{filename}' não encontrada.")
 
-    return FileResponse(path=image_path, media_type="image/jpeg")
+    return FileResponse(
+        path=image_path,
+        media_type="image/jpeg",
+        headers={
+            "Cache-Control": "public, max-age=86400",
+            "ETag": str(image_path.stat().st_mtime),
+        }
+    )

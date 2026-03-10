@@ -6,6 +6,9 @@ import logging
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from config.settings import settings
 
 from controllers.catalog_controller import router as catalog_router
 from controllers.product_controller import router as product_router
@@ -28,6 +31,13 @@ app = FastAPI(
     description="API para processamento e cadastro de catálogo de produtos Firmato Móveis.",
     version="1.0.0",
     lifespan=lifespan,
+)
+
+# depois do app = FastAPI(...)
+app.mount(
+    "/static/images",
+    StaticFiles(directory=str(settings.general.tmp_images_path)),
+    name="images",
 )
 
 app.include_router(catalog_router)
