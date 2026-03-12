@@ -1,1 +1,0 @@
-# smart-image-search-firmato

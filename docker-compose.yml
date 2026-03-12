@@ -1,0 +1,67 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: firmato-catalog-api:latest
+    container_name: firmato-api
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+
+    # Variáveis de ambiente — sobrescreve o que estiver no config.ini se necessário
+    environment:
+      - PYTHONUNBUFFERED=1
+      # Cache do modelo CLIP (evita re-download a cada restart)
+      - TRANSFORMERS_CACHE=/app/.cache/huggingface
+      - HF_HOME=/app/.cache/huggingface
+
+    volumes:
+      # Dados persistentes — ajuste os caminhos do host conforme seu servidor
+      - ./landing:/app/landing                     # imagens brutas de entrada
+      - ./data:/app/data                           # JSONs por produto
+      - ./output/nas:/app/output/nas               # imagens processadas no NAS
+      - ./embeddings:/app/embeddings               # embeddings.npy + metadata_index.json
+      - ./logs:/app/logs                           # logs de execução
+      - ./src/config.ini:/app/src/config.ini:ro    # configuração (read-only)
+      - ./src/config:/app/src/config               # credenciais GCS etc.
+      - clip_cache:/app/.cache/huggingface         # cache do modelo CLIP
+
+    # tmp_images é gerado no startup — não precisa de volume persistente
+    tmpfs:
+      - /app/tmp_images:size=512m
+      - /app/tmp_uploads:size=256m
+
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s   # CLIP demora para carregar na primeira vez
+      retries: 3
+
+    deploy:
+      resources:
+        limits:
+          memory: 4G     # ajuste para cima se usar GPU ou dataset grande
+        reservations:
+          memory: 1G
+
+    networks:
+      - firmato-net
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  clip_cache:
+    driver: local
+
+networks:
+  firmato-net:
+    name: firmato-net
+    driver: bridge

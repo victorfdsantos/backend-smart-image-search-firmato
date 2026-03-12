@@ -1,0 +1,52 @@
+# Controle de versão
+.git
+.gitignore
+
+# Ambiente virtual local
+.venv
+.backend
+venv
+env
+
+# Cache Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Dados de runtime — serão montados como volumes em produção
+landing/
+data/
+output/
+embeddings/
+logs/
+tmp_images/
+tmp_uploads/
+
+# Cache do modelo (baixado em runtime ou no build com o RUN comentado)
+.cache/
+
+# Credenciais — nunca entram na imagem
+src/config/gcs_credentials.json
+*.json
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testes
+tests/
+.pytest_cache/
+.coverage
+
+# Documentação
+README.md
+*.md
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
