@@ -1,2 +1,17 @@
+fastapi==0.115.0
+python-multipart>=0.0.20,<1.0
 
-reflex==0.8.27
+pandas==2.2.2
+openpyxl==3.1.5
+
+pillow==10.4.0
+
+google-cloud-storage==2.18.2
+
+requests==2.32.3
+
+# Embeddings / busca por similaridade
+torch==2.3.1
+transformers==4.44.2
+numpy==1.26.4
+deep-translator==1.11.4
