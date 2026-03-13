@@ -5,7 +5,6 @@ FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
-# Dependências de sistema necessárias para compilar extensões nativas
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
@@ -15,7 +14,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY requirements.txt .
 
-# Instala tudo em /build/wheels para copiar na imagem final
 RUN pip install --upgrade pip && \
     pip install --prefix=/install --no-cache-dir -r requirements.txt
 
@@ -27,11 +25,11 @@ FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app/src
+    PYTHONPATH=/app/src \
+    HF_HOME=/app/.cache/huggingface
 
 WORKDIR /app
 
-# Dependências de sistema em runtime (pillow, etc.)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgomp1 \
     libjpeg62-turbo \
@@ -39,15 +37,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libwebp7 \
     && rm -rf /var/lib/apt/lists/*
 
-# Copia pacotes instalados no build stage
 COPY --from=builder /install /usr/local
-
-# Copia o código-fonte
 COPY src/ ./src/
 
-# Usuário não-root para produção
-RUN useradd --no-create-home --shell /bin/false appuser && \
+# Cria o diretório de cache do HuggingFace com permissões corretas
+# antes de trocar para appuser — o volume será montado aqui
+RUN useradd --no-create-home --shell /bin/false --home-dir /app appuser && \
+    mkdir -p /app/.cache/huggingface && \
     chown -R appuser:appuser /app
+
 USER appuser
 
 EXPOSE 8000

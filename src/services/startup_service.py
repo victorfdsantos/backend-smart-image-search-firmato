@@ -18,22 +18,10 @@ class StartupService:
     def __init__(self, logger: logging.Logger):
         self.logger = logger
 
-    # ------------------------------------------------------------------
-    # Ponto de entrada
-    # ------------------------------------------------------------------
-
     def run(self, app_state: dict) -> None:
-        """
-        Executado uma vez ao subir a API.
-        Popula app_state com os recursos carregados.
-        """
         self._load_embeddings(app_state)
         self._load_clip_model(app_state)
         self._rebuild_tmp_images()
-
-    # ------------------------------------------------------------------
-    # Embeddings
-    # ------------------------------------------------------------------
 
     def _load_embeddings(self, app_state: dict) -> None:
         npy_path = settings.embeddings.npy_path
@@ -66,17 +54,22 @@ class StartupService:
             except Exception as exc:
                 self.logger.warning(f"[Startup] Falha ao carregar metadata: {exc}")
 
-    # ------------------------------------------------------------------
-    # tmp_images — thumbnails 400x400 mantendo proporção
-    # ------------------------------------------------------------------
-
     def _rebuild_tmp_images(self) -> None:
         tmp_dir = settings.general.tmp_images_path
         nas_base = settings.nas.base_path
 
-        if tmp_dir.exists():
-            shutil.rmtree(tmp_dir)
-        tmp_dir.mkdir(parents=True)
+        # Limpa o conteúdo sem deletar a pasta —
+        # shutil.rmtree falha se tmp_images for um tmpfs montado pelo Docker
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        for item in tmp_dir.iterdir():
+            try:
+                if item.is_file():
+                    item.unlink()
+                elif item.is_dir():
+                    shutil.rmtree(item)
+            except Exception as exc:
+                self.logger.warning(f"[Startup] Não foi possível remover '{item}': {exc}")
+
         self.logger.info(f"[Startup] tmp_images limpo e recriado: {tmp_dir}")
 
         if not nas_base.exists():
@@ -108,12 +101,7 @@ class StartupService:
 
         self.logger.info(f"[Startup] {copied} thumbnail(s) gerada(s) em tmp_images.")
 
-    # ------------------------------------------------------------------
-    # CLIP
-    # ------------------------------------------------------------------
-
     def _load_clip_model(self, app_state: dict) -> None:
-        """Carrega o modelo CLIP para encoding de queries em runtime."""
         try:
             import torch
             from transformers import CLIPProcessor, CLIPModel
@@ -132,3 +120,4 @@ class StartupService:
             self.logger.warning(f"[Startup] Falha ao carregar CLIP: {exc}. Busca por similaridade indisponível.")
             app_state["clip_model"] = None
             app_state["clip_processor"] = None
+            app_state["clip_device"] = "cpu"

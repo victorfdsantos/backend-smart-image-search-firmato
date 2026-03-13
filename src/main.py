@@ -2,6 +2,7 @@
 
 from contextlib import asynccontextmanager
 import logging
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI
@@ -10,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 
 from config.settings import settings
-
 from controllers.catalog_controller import router as catalog_router
 from controllers.product_controller import router as product_router
 from controllers.search_controller import router as search_router
@@ -22,8 +22,12 @@ async def lifespan(app: FastAPI):
     logger = logging.getLogger("startup")
     logging.basicConfig(level=logging.INFO)
 
+    # Garante que tmp_images existe antes de montar o StaticFiles
+    tmp_path = settings.general.tmp_images_path
+    tmp_path.mkdir(parents=True, exist_ok=True)
+
     startup = StartupService(logger)
-    startup.run(app.state.__dict__) 
+    startup.run(app.state.__dict__)
 
     yield
 
@@ -35,7 +39,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# depois do app = FastAPI(...)
 app.mount(
     "/static/images",
     StaticFiles(directory=str(settings.general.tmp_images_path)),
@@ -44,7 +47,7 @@ app.mount(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -52,6 +55,7 @@ app.add_middleware(
 app.include_router(catalog_router)
 app.include_router(product_router)
 app.include_router(search_router)
+
 
 @app.get("/health", tags=["System"], summary="Health check")
 async def health_check() -> JSONResponse:
