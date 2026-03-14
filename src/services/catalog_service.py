@@ -37,7 +37,8 @@ class CatalogService:
         self.json_service = JsonService(logger)
         self.diff_service = DiffService(logger, self.json_service)
 
-        self._filenames_to_clean: list[str] = []
+        # Paths reais (com extensão) dos arquivos da landing a remover ao final
+        self._landing_paths_to_clean: list[Path] = []
         # Cache de caminhos NAS gerados nesta execução: (product_id, slot) → str | None
         # None = slot foi deletado; ausente = não tocado (preserva JSON)
         self._secondary_cache: dict[tuple[int, int], Optional[str]] = {}
@@ -300,7 +301,9 @@ class CatalogService:
         """
         self.logger.info(f"Id {product_id}: [{label}] '{source_filename}' → '{dest_filename}'")
 
-        landing_path = self.image_service.file_exists_in_landing(source_filename)
+        # file_exists_in_landing recebe o nome sem extensão e devolve o Path real
+        source_filename_no_ext = Path(source_filename).stem
+        landing_path = self.image_service.file_exists_in_landing(source_filename_no_ext)
         if landing_path is None:
             self.logger.error(f"Id {product_id}: [{label}] '{source_filename}' não encontrado na landing.")
             return None
@@ -320,7 +323,8 @@ class CatalogService:
 
             # GCS: self.storage_service.upload_image(temp_img, dest_filename)
 
-            self._filenames_to_clean.append(source_filename)
+            # Registra o path real (com extensão correta) para remoção posterior
+            self._landing_paths_to_clean.append(landing_path)
             self.logger.info(f"Id {product_id}: [{label}] salvo em {nas_path}")
             return nas_path
 
@@ -332,14 +336,21 @@ class CatalogService:
     # ------------------------------------------------------------------
 
     def _cleanup_landing(self) -> int:
+        # Deduplica por path real para não tentar remover duas vezes o mesmo arquivo
+        seen: set[Path] = set()
         count = 0
-        for filename in set(self._filenames_to_clean):
-            path = settings.general.landing_path / filename
+        for path in self._landing_paths_to_clean:
+            if path in seen:
+                continue
+            seen.add(path)
             try:
                 if path.exists():
                     path.unlink()
                     count += 1
+                    self.logger.info(f"[Cleanup] Removido da landing: {path.name}")
+                else:
+                    self.logger.debug(f"[Cleanup] Já não existe na landing: {path.name}")
             except Exception as exc:
-                self.logger.error(f"[Cleanup] Erro ao remover '{filename}': {exc}")
+                self.logger.error(f"[Cleanup] Erro ao remover '{path.name}': {exc}")
         self.logger.info(f"[Cleanup] {count} arquivo(s) removido(s) da landing.")
         return count

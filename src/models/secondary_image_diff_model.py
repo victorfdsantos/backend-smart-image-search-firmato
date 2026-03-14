@@ -3,7 +3,7 @@ Dataclasses que representam o resultado de uma comparação Excel vs JSON.
 São o contrato de dados entre DiffService e CatalogService —
 nenhum dos dois precisa conhecer os detalhes internos do outro.
 
-SecondaryImageDiff  → estado de um slot de imagem secundária (1-4)
+SecondaryImageDiff  → estado de um slot de imagem secundária (1-3)
 """
 
 from dataclasses import dataclass, field
@@ -22,7 +22,7 @@ class SecondaryImageDiff:
       is_deleted   → Excel vazio, JSON tem caminho          → remover NAS/bucket/JSON
       is_empty     → Excel vazio, JSON também vazio         → slot não utilizado
     """
-    slot: int                     # 1, 2, 3 ou 4
+    slot: int                     # 1, 2 ou 3
     excel_value: Optional[str]    # valor atual no Excel para este slot
     json_nas_path: Optional[str]  # caminho NAS gravado no JSON
     json_bucket_uri: Optional[str]# URI bucket gravado no JSON

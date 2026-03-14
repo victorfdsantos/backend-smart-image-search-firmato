@@ -124,23 +124,3 @@ class ImageService:
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
         self.logger.debug(f"Hash gerado para colunas {hash_columns}: {digest[:16]}...")
         return digest
-
-    # ------------------------------------------------------------------
-    # Limpeza da landing
-    # ------------------------------------------------------------------
-
-    def delete_from_landing(self, filename: str) -> None:
-        """Remove arquivo processado da landing. Loga, mas não falha."""
-        try:
-            path = settings.general.landing_path / filename
-            if path.exists():
-                path.unlink()
-                self.logger.info(f"Arquivo removido da landing: {path}")
-            else:
-                self.logger.debug(
-                    f"Arquivo já não existe na landing (não removido): {path}"
-                )
-        except Exception as exc:
-            self.logger.error(
-                f"Erro ao remover '{filename}' da landing: {exc}", exc_info=True
-            )

@@ -23,10 +23,11 @@ _JSON_ONLY_FIELDS = {
 }
 
 # Colunas do Excel que, se mudarem, exigem mover a pasta no NAS
+# Ordem: Categoria_Principal / Faixa_Preco / Marca
 _NAS_ORGANIZER_FIELDS = {
-    "Marca": "marca",
-    "Linha_Colecao": "linha_colecao",
     "Categoria_Principal": "categoria_principal",
+    "Faixa_Preco":         "faixa_preco",
+    "Marca":               "marca",
 }
 
 
