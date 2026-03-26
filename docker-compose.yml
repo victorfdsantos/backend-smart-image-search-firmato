@@ -8,8 +8,8 @@ services:
     image: firmato-backend:latest
     container_name: firmato-backend
     restart: unless-stopped
-    expose:
-      - "8000"
+    ports:
+      - "8000:8000"   # acessível em localhost:8000 (Insomnia / curl direto)
     environment:
       - PYTHONUNBUFFERED=1
       - HF_HOME=/app/.cache/huggingface
@@ -47,6 +47,49 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  # ---------------------------------------------------------------------------
+  # AI Service — indexação e retreinamento incremental de embeddings
+  # ---------------------------------------------------------------------------
+  ai:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    image: firmato-ai:latest
+    container_name: firmato-ai
+    restart: unless-stopped
+    ports:
+      - "9000:9000"   # acessível em localhost:9000 (Insomnia / curl direto)
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_HOME=/app/.cache/huggingface
+    volumes:
+      - ./ai/src/config.ini:/app/src/config.ini:ro
+      - ./nas/data:/app/nas/data
+      - ./nas/output:/app/nas/output
+      - ./nas/embeddings:/app/nas/embeddings
+      - ./nas/logs:/app/nas/logs
+      - clip_cache:/app/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 6G
+        reservations:
+          memory: 2G
+    networks:
+      - firmato-net
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
   frontend:
     build:
       context: ./frontend
@@ -54,11 +97,10 @@ services:
     image: firmato-frontend:latest
     container_name: firmato-frontend
     restart: unless-stopped
-    expose:
-      - "3000"
+    ports:
+      - "3000:3000"   # acessível direto em localhost:3000 além do nginx :80
     environment:
       - NODE_ENV=production
-      # Next.js rewrite usa /api/* → nginx → backend, então API_BASE aponta pro nginx
       - API_BASE=http://backend:8000
     depends_on:
       backend:
@@ -67,8 +109,8 @@ services:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
-      start_period: 60s
-      retries: 3
+      start_period: 120s
+      retries: 5
     deploy:
       resources:
         limits:
@@ -92,8 +134,10 @@ services:
     volumes:
       - ./nginx/firmato.conf:/etc/nginx/conf.d/default.conf:ro
     depends_on:
-      - frontend
-      - backend
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
     networks:
       - firmato-net
     logging:
