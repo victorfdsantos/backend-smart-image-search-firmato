@@ -14,8 +14,6 @@ src/output/
 src/data/
 src/logs/
 temp_uploads
-frontend
-backend
 .backend
 nas
 
