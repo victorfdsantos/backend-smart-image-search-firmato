@@ -154,7 +154,6 @@ class StartupService:
             if filename in conflicts:
                 self.logger.warning(f"[Startup] Conflito ignorado: '{filename}'")
                 continue
-
             try:
                 shutil.copy2(img_path, tmp_dir / filename)
                 conflicts[filename] = img_path

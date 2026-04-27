@@ -13,7 +13,7 @@ from utils.logger import setup_logger
 
 router = APIRouter(prefix="/products", tags=["Products"])
 
-_DEFAULT_PAGE_SIZE = 20
+_DEFAULT_PAGE_SIZE = 12
 
 
 @router.get("")
