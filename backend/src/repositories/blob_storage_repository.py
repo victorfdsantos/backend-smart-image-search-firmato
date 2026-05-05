@@ -86,17 +86,15 @@ class BlobStorageRepository:
     # --------------------------------------------------
     # COPY (STAGING → PROD)
     # --------------------------------------------------
-    def copy(self, src_container: str, dst_container: str, blob_name: str) -> None:
+    def copy(self, container: str, src_blob: str, dst_blob: str):
         try:
-            src_blob = self.client.get_blob_client(src_container, blob_name)
-            dst_blob = self.client.get_blob_client(dst_container, blob_name)
+            src = self.client.get_blob_client(container, src_blob)
+            dst = self.client.get_blob_client(container, dst_blob)
 
-            src_url = src_blob.url
+            dst.start_copy_from_url(src.url)
 
-            dst_blob.start_copy_from_url(src_url)
-
-            self.logger.info(f"[Blob] Copy OK: {src_container}/{blob_name} → {dst_container}/{blob_name}")
+            self.logger.info(f"[Blob] Copy OK: {src_blob} → {dst_blob}")
 
         except Exception as exc:
-            self.logger.error(f"[Blob] Erro copy {blob_name}: {exc}")
+            self.logger.error(f"[Blob] Erro copy {src_blob}: {exc}")
             raise

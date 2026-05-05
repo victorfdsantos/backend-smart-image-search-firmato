@@ -79,7 +79,7 @@ class StartupService:
                 with open(emb.bm25_pkl, "rb") as f:
                     data = pickle.load(f)
                 app_state["bm25"] = data["bm25"]
-                app_state["bm25_corpus"] = data["tokenized_corpus"]
+                app_state["bm25_corpus"] = data["corpus"]
                 self.logger.info(
                     f"[Startup] BM25 carregado: {len(app_state['bm25_corpus'])} documentos"
                 )
@@ -124,10 +124,15 @@ class StartupService:
     def _load_st(self, app_state: dict) -> None:
         try:
             from sentence_transformers import SentenceTransformer
+            import torch
 
             model_name = settings.models.st_model_name
-            app_state["st_model"] = SentenceTransformer(model_name)
-            self.logger.info(f"[Startup] ST carregado: {model_name}")
+            device_cfg = settings.models.device
+            device = "cuda" if (device_cfg == "cuda" and torch.cuda.is_available()) else "cpu"
+
+            app_state["st_model"] = SentenceTransformer(model_name, device=device)
+
+            self.logger.info(f"[Startup] ST carregado: {model_name} | device={device}")
 
         except Exception as e:
             self.logger.warning(f"[Startup] Falha ao carregar ST: {e}")

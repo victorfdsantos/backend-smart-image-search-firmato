@@ -105,6 +105,22 @@ class EmbeddingsSettings:
     npy_path: Path = _resolve(_cfg.get("embeddings", "npy_path"))
     metadata_path: Path = _resolve(_cfg.get("embeddings", "metadata_path"))
 
+class ModelSettings:
+    clip_model_name: str = _cfg.get(
+        "models",
+        "clip_model_name",
+        fallback="openai/clip-vit-large-patch14"
+    )
+    st_model_name: str = _cfg.get(
+        "models",
+        "st_model_name",
+        fallback="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    )
+    device: str = _cfg.get(
+        "models",
+        "device",
+        fallback="cpu"
+    )
 
 class Settings:
     general = GeneralSettings()
@@ -114,6 +130,7 @@ class Settings:
     hash = HashSettings()
     embeddings = EmbeddingsSettings()
     azure = AzureSettings()
+    models = ModelSettings()
 
 settings = Settings()
 

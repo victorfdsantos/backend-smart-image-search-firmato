@@ -74,7 +74,10 @@ async def lifespan(app: FastAPI):
         # STARTUP SERVICE
         # -------------------------
         logger.info("[Startup] Rodando StartupService...")
-        startup = StartupService(logger)
+        startup = StartupService(
+            logger=logger,
+            blob_repo=app.state.blob_repo
+        )
         startup.run(app.state.__dict__)
 
         logger.info("[Startup] Aplicação pronta ✔")
@@ -145,4 +148,4 @@ async def health_check() -> JSONResponse:
 # --------------------------------------------------
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=8000)

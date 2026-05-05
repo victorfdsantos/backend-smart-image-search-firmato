@@ -16,7 +16,7 @@ class BlobStorageRepository:
 
     def get_json(self, pid: str) -> Optional[dict]:
         try:
-            blob = self.client.get_blob_client("data", f"{pid}.json")
+            blob = self.client.get_blob_client("firmato-catalogo", f"data_staging/{pid}.json")
             data = blob.download_blob().readall()
             return json.loads(data)
 
@@ -26,7 +26,7 @@ class BlobStorageRepository:
 
     def get_image(self, pid: str) -> Optional[bytes]:
         try:
-            blob = self.client.get_blob_client("output", f"{pid}.jpg")
+            blob = self.client.get_blob_client("firmato-catalogo", f"thumbnail_staging/{pid}.jpg")
             return blob.download_blob().readall()
 
         except Exception as e:
@@ -38,17 +38,17 @@ class BlobStorageRepository:
     # --------------------------------------------------
 
     def save_clip_embeddings(self, data: bytes):
-        blob = self.client.get_blob_client("embeddings", "clip_embeddings.npy")
+        blob = self.client.get_blob_client("firmato-catalogo", "embeddings/clip_embeddings.npy")
         blob.upload_blob(data, overwrite=True)
 
     def save_text_embeddings(self, data: bytes):
-        blob = self.client.get_blob_client("embeddings", "text_embeddings.npy")
+        blob = self.client.get_blob_client("firmato-catalogo", "embeddings/text_embeddings.npy")
         blob.upload_blob(data, overwrite=True)
 
     def save_metadata(self, data: bytes):
-        blob = self.client.get_blob_client("embeddings", "metadata.json")
+        blob = self.client.get_blob_client("firmato-catalogo", "embeddings/metadata.json")
         blob.upload_blob(data, overwrite=True)
 
     def save_bm25(self, data: bytes):
-        blob = self.client.get_blob_client("embeddings", "bm25.pkl")
+        blob = self.client.get_blob_client("firmato-catalogo", "embeddings/bm25.pkl")
         blob.upload_blob(data, overwrite=True)

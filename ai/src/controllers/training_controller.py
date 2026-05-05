@@ -18,11 +18,8 @@ async def train(request: Request, body: dict):
     logger = setup_logger("training")
     t0 = time.time()
 
-    repo = BlobStorageRepository(
-        connection_string=request.app.state.blob_conn,
-        logger=logger
-    )
-
+    repo = request.app.state.blob_repo
+    
     service = IndexService(
         logger=logger,
         app_state=request.app.state.__dict__,

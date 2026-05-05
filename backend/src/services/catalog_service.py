@@ -87,9 +87,11 @@ class CatalogService:
                 landing_map[pid] = img_name
 
                 sharepoint_updates.append({
-                    "Id_produto": pid,
-                    "Caminho_Imagem": fname,
-                    "Chave_Especial": new_hash
+                    "pid": pid,\
+                    "fields": {
+                        "Caminho_Imagem": fname,
+                        "Chave_Especial": new_hash
+                    }
                 })
 
                 hash_index[pid] = new_hash
@@ -125,10 +127,10 @@ class CatalogService:
 
                 original_name = landing_map.get(pid)
                 if original_name:
-                    self.blob.delete("firmato-catalogo", f"landing/{original_name}")
+                    self.blob.delete("firmato-catalogo", original_name)
 
-            if sharepoint_updates:
-                self.sp.update_rows(sharepoint_updates)
+            for item in sharepoint_updates:
+                self.sp.update_row(item["pid"], item["fields"])
 
             self._save_hash_index(hash_index)
 
@@ -144,9 +146,13 @@ class CatalogService:
     # --------------------------------------------------
     # HELPERS
     # --------------------------------------------------
+    
+    def _move(self, src_path, dst_path, blob_name):
+        CONTAINER = "firmato-catalogo"
+        src_blob = f"{src_path}/{blob_name}"
+        dst_blob = f"{dst_path}/{blob_name}"
 
-    def _move(self, src_container, dst_container, blob_name):
-        self.blob.copy(src_container, dst_container, blob_name)
+        self.blob.copy(CONTAINER, src_blob, dst_blob)
 
     def _clear_staging(self, ids):
         for pid in ids:
@@ -165,8 +171,8 @@ class CatalogService:
 
     def _save_hash_index(self, hash_index: dict):
         self.blob.upload(
-            "utils",
-            "hash_index.json",
+            "firmato-catalogo",
+            "utils/hash_index.json",
             json.dumps(hash_index).encode(),
             "application/json"
         )

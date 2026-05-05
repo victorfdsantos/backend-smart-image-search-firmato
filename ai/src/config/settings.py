@@ -59,6 +59,8 @@ class ModelSettings:
                                    fallback="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     device: str = _cfg.get("models", "device", fallback="cpu")
 
+class AzureSettings:
+    connection_string: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
 
 class LogsSettings:
     path: Path = _resolve(_cfg.get("logs", "path", fallback="./logs"))
@@ -69,6 +71,7 @@ class Settings:
     embeddings = EmbeddingsSettings()
     models = ModelSettings()
     logs = LogsSettings()
+    azure = AzureSettings()
 
 
 settings = Settings()
