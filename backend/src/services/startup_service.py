@@ -2,7 +2,6 @@ import json
 import logging
 import pickle
 from io import BytesIO
-from pathlib import Path
 
 import numpy as np
 from config.settings import settings
@@ -18,12 +17,11 @@ class StartupService:
     # ENTRYPOINT
     # --------------------------------------------------
 
-    def run(self, app_state: dict) -> None:
-        self._load_embeddings(app_state)
+    async def run(self, app_state: dict) -> None:
+        await self._load_embeddings(app_state)
         self._load_clip_model(app_state)
         self._load_st_model(app_state)
-        self._load_bm25(app_state)
-        self._rebuild_tmp_images()
+        await self._load_bm25(app_state)
 
         self.logger.info("[Startup] Service pronto.")
 
@@ -31,7 +29,7 @@ class StartupService:
     # EMBEDDINGS (BLOB)
     # --------------------------------------------------
 
-    def _load_embeddings(self, app_state: dict) -> None:
+    async def _load_embeddings(self, app_state: dict) -> None:
         container = "firmato-catalogo"
 
         app_state["clip_embeddings"] = None
@@ -39,21 +37,21 @@ class StartupService:
         app_state["embeddings_metadata"] = None
 
         try:
-            clip_bytes = self.blob.download(container, "embeddings/clip_embeddings.npy")
+            clip_bytes = await self.blob.download(container, "embeddings/clip_embeddings.npy")
             app_state["clip_embeddings"] = np.load(BytesIO(clip_bytes))
             self.logger.info(f"[Startup] CLIP embeddings: {app_state['clip_embeddings'].shape}")
         except Exception as e:
             self.logger.warning(f"[Startup] Falha CLIP embeddings: {e}")
 
         try:
-            text_bytes = self.blob.download(container, "embeddings/text_embeddings.npy")
+            text_bytes = await self.blob.download(container, "embeddings/text_embeddings.npy")
             app_state["text_embeddings"] = np.load(BytesIO(text_bytes))
             self.logger.info(f"[Startup] TEXT embeddings: {app_state['text_embeddings'].shape}")
         except Exception as e:
             self.logger.warning(f"[Startup] Falha TEXT embeddings: {e}")
 
         try:
-            meta_bytes = self.blob.download(container, "embeddings/metadata.json")
+            meta_bytes = await self.blob.download(container, "embeddings/metadata.json")
             app_state["embeddings_metadata"] = json.loads(meta_bytes)
             self.logger.info(f"[Startup] Metadata: {len(app_state['embeddings_metadata'])}")
         except Exception as e:
@@ -72,7 +70,7 @@ class StartupService:
             device = "cuda" if torch.cuda.is_available() else "cpu"
 
             app_state["clip_model"] = CLIPModel.from_pretrained(model_name).to(device).eval()
-            app_state["clip_processor"] = CLIPProcessor.from_pretrained(model_name)
+            app_state["clip_processor"] = CLIPProcessor.from_pretrained(model_name, use_fast=True)
             app_state["clip_device"] = device
 
             self.logger.info(f"[Startup] CLIP carregado: {model_name} | device={device}")
@@ -104,14 +102,14 @@ class StartupService:
     # BM25
     # --------------------------------------------------
 
-    def _load_bm25(self, app_state: dict) -> None:
+    async def _load_bm25(self, app_state: dict) -> None:
         container = "firmato-catalogo"
 
         app_state["bm25"] = None
         app_state["bm25_corpus"] = None
 
         try:
-            data = self.blob.download(container, "embeddings/bm25.pkl")
+            data = await self.blob.download(container, "embeddings/bm25.pkl")
             obj = pickle.loads(data)
 
             app_state["bm25"] = obj["bm25"]

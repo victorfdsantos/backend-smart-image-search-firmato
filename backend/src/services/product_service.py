@@ -1,50 +1,53 @@
 import json
 import logging
-from pathlib import Path
 from typing import Optional
-from config.settings import settings
+import asyncio
+
 
 class ProductService:
 
-    def __init__(self, logger: logging.Logger):
+    def __init__(self, logger: logging.Logger, blob_repo):
         self.logger = logger
-        self.data_dir = settings.general.data_path
+        self.blob = blob_repo
+        self.container = "firmato-catalogo"
 
-    def list_active(
+    # --------------------------------------------------
+    # LISTAGEM
+    # --------------------------------------------------
+    async def list_active(
         self,
         page: int = 1,
         page_size: int = 12,
         allowed_ids: Optional[set] = None,
     ) -> dict:
+
         start = (page - 1) * page_size
-        end   = start + page_size
+        end = start + page_size
 
         items = []
 
-        # CASO COM FILTRO
+        # 🔥 pega todos os jsons do blob
+        blobs = await self.blob.list_blobs(self.container, "data/")
+        all_ids = sorted(
+            int(b.split("/")[-1].replace(".json", ""))
+            for b in blobs
+        )
+
+        # filtro
         if allowed_ids is not None:
-            sorted_ids = sorted(int(i) for i in allowed_ids)
-            total = len(sorted_ids)
+            all_ids = [i for i in all_ids if str(i) in allowed_ids]
 
-            for pid in sorted_ids[start:end]:
-                path = self.data_dir / f"{pid}.json"
-                product = self._load(path)
-                if product and self._is_active(product):
-                    items.append(self._to_summary(product))
+        total = len(all_ids)
 
-        # SEM FILTRO
-        else:
-            all_paths = sorted(
-                self.data_dir.glob("*.json"),
-                key=lambda p: int(p.stem) if p.stem.isdigit() else 0,
-            )
+        page_ids = all_ids[start:end]
 
-            total = len(all_paths)
+        # 🔥 paralelo (importante)
+        tasks = [self._load_product(pid) for pid in page_ids]
+        products = await asyncio.gather(*tasks)
 
-            for json_path in all_paths[start:end]:
-                product = self._load(json_path)
-                if product and self._is_active(product):
-                    items.append(self._to_summary(product))
+        for product in products:
+            if product and self._is_active(product):
+                items.append(self._to_summary(product))
 
         return {
             "page": page,
@@ -54,34 +57,46 @@ class ProductService:
             "items": items,
         }
 
-    def get_by_id(self, product_id: int) -> Optional[dict]:
-        path = self.data_dir / f"{product_id}.json"
-        if not path.exists():
-            self.logger.warning(f"[Product] JSON não encontrado: {path}")
-            return None
-        return self._load(path)
+    # --------------------------------------------------
+    # DETALHE
+    # --------------------------------------------------
+    async def get_by_id(self, product_id: int) -> Optional[dict]:
+        return await self._load_product(product_id)
 
-    def _load(self, path: Path) -> Optional[dict]:
+    # --------------------------------------------------
+    # LOAD JSON (BLOB)
+    # --------------------------------------------------
+    async def _load_product(self, pid: int) -> Optional[dict]:
         try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
+            data = await self.blob.download(
+                self.container,
+                f"data/{pid}.json"
+            )
+            return json.loads(data)
+
         except Exception as exc:
-            self.logger.warning(f"[Product] Erro ao ler {path}: {exc}")
+            self.logger.warning(f"[Product] JSON não encontrado {pid}: {exc}")
             return None
 
+    # --------------------------------------------------
+    # HELPERS
+    # --------------------------------------------------
     def _is_active(self, product: dict) -> bool:
         return str(product.get("status", "")).strip().lower() == "ativo"
 
     def _to_summary(self, product: dict) -> dict:
         pid = product.get("id_produto")
+
         return {
-            "id_produto":          pid,
-            "nome_produto":        product.get("nome_produto"),
-            "marca":               product.get("marca"),
+            "id_produto": pid,
+            "nome_produto": product.get("nome_produto"),
+            "marca": product.get("marca"),
             "categoria_principal": product.get("categoria_principal"),
-            "faixa_preco":         product.get("faixa_preco"),
-            "altura_cm":           product.get("altura_cm"),
-            "largura_cm":          product.get("largura_cm"),
-            "profundidade_cm":     product.get("profundidade_cm"),
-            "imagem_url":          f"/static/images/{pid}.jpg",
+            "faixa_preco": product.get("faixa_preco"),
+            "altura_cm": product.get("altura_cm"),
+            "largura_cm": product.get("largura_cm"),
+            "profundidade_cm": product.get("profundidade_cm"),
+
+            # 🔥 agora correto
+            "thumbnail_url": f"/products/thumbnail/{pid}",
         }
