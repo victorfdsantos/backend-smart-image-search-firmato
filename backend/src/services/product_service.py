@@ -97,6 +97,15 @@ class ProductService:
             "largura_cm": product.get("largura_cm"),
             "profundidade_cm": product.get("profundidade_cm"),
 
-            # 🔥 agora correto
-            "thumbnail_url": f"/products/thumbnail/{pid}",
+            "thumbnail_url": f"/products/images/{pid}.jpg",
         }
+    
+    async def get_image(self, filename: str) -> bytes:
+        try:
+            return await self.blob.download(
+                self.container,
+                f"thumbnail/{filename}"
+            )
+        except Exception as exc:
+            self.logger.warning(f"[Product] Imagem não encontrada {filename}: {exc}")
+            return None

@@ -23,6 +23,7 @@ from services.startup_service import StartupService
 from services.image_service import ImageProcessingService
 from services.product_data_service import ProductDataService
 from services.filter_service import FilterService
+from services.product_service import ProductService
 
 # Repositories
 from repositories.blob_storage_repository import BlobStorageRepository
@@ -69,6 +70,10 @@ async def lifespan(app: FastAPI):
         app.state.image_service = ImageProcessingService(logger)
         app.state.data_service = ProductDataService(logger)
         app.state.filter_service = FilterService(logger)
+        app.state.product_service = ProductService(
+            logger=logger,
+            blob_repo=app.state.blob_repo
+        )
 
         # -------------------------
         # STARTUP SERVICE
@@ -78,7 +83,7 @@ async def lifespan(app: FastAPI):
             logger=logger,
             blob_repo=app.state.blob_repo
         )
-        startup.run(app.state.__dict__)
+        await startup.run(app.state.__dict__)
 
         logger.info("[Startup] Aplicação pronta ✔")
 

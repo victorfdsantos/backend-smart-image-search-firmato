@@ -11,6 +11,13 @@ class BlobStorageRepository:
         self.client = BlobServiceClient.from_connection_string(connection_string)
 
     # --------------------------------------------------
+    # URL
+    # --------------------------------------------------
+    def get_blob_url(self, container: str, blob_name: str) -> str:
+        blob_client = self.client.get_blob_client(container, blob_name)
+        return blob_client.url
+
+    # --------------------------------------------------
     # LIST
     # --------------------------------------------------
     async def list_blobs(self, container: str, prefix: str = "") -> list[str]:
