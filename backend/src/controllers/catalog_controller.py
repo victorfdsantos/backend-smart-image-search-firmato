@@ -1,7 +1,9 @@
+"""CatalogController — endpoints de sincronização e retreino do catálogo."""
+
 import time
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from services.catalog_service import CatalogService
 from services.training_service import TrainingService
@@ -12,10 +14,10 @@ router = APIRouter(prefix="/catalog", tags=["Catalog"])
 
 @router.post(
     "/register",
-    summary="Processa catálogo e retreina embeddings",
+    summary="Sincroniza catálogo com SharePoint/Blob e retreina embeddings",
 )
 async def register_catalog(request: Request) -> JSONResponse:
-    logger = setup_logger("catalog_process")
+    logger = setup_logger("catalog_register")
     t0 = time.time()
 
     try:
@@ -27,22 +29,17 @@ async def register_catalog(request: Request) -> JSONResponse:
             data_service=request.app.state.data_service,
             filter_service=request.app.state.filter_service,
         )
-
         training = TrainingService(logger)
 
-        # -------------------------
-        # 1. PROCESS
-        # -------------------------
-        result = svc.process()
+        # ---- 1. PROCESS ----
+        result = await svc.process()
         updated_ids = result["updated_ids"]
 
-        # -------------------------
-        # 2. TRAINING
-        # -------------------------
+        # ---- 2. TRAIN ----
         if updated_ids:
-            ok = training.train(
+            ok = await training.train(
                 image_ids=updated_ids,
-                data_ids=updated_ids
+                data_ids=updated_ids,
             )
 
             if not ok:
@@ -50,37 +47,32 @@ async def register_catalog(request: Request) -> JSONResponse:
                 return JSONResponse(
                     status_code=400,
                     content={
-                        "status": "training_failed",
+                        "status":          "training_failed",
                         "elapsed_seconds": round(time.time() - t0, 2),
-                        "processed": result["processed"],
-                        "skipped": result["skipped"],
-                        "errors": result["errors"],
-                        "updated_ids": updated_ids,
-                    }
+                        "processed":       result["processed"],
+                        "skipped":         result["skipped"],
+                        "errors":          result["errors"],
+                        "updated_ids":     updated_ids,
+                    },
                 )
 
-            # -------------------------
-            # 3. COMMIT
-            # -------------------------
-            svc.commit(
+            # ---- 3. COMMIT ----
+            await svc.commit(
                 updated_ids=updated_ids,
                 landing_map=result["landing_map"],
                 sharepoint_updates=result["sharepoint_updates"],
-                hash_index=result["hash_index"],  # 👈 novo
+                hash_index=result["hash_index"],
             )
-
         else:
             logger.info("[Catalog] Nenhuma alteração detectada")
 
-        elapsed = round(time.time() - t0, 2)
-
         return JSONResponse(content={
-            "status": "success",
-            "elapsed_seconds": elapsed,
-            "processed": result["processed"],
-            "skipped": result["skipped"],
-            "errors": result["errors"],
-            "updated_ids": updated_ids,
+            "status":          "success",
+            "elapsed_seconds": round(time.time() - t0, 2),
+            "processed":       result["processed"],
+            "skipped":         result["skipped"],
+            "errors":          result["errors"],
+            "updated_ids":     updated_ids,
         })
 
     except Exception as exc:

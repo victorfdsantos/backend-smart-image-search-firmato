@@ -10,6 +10,7 @@ import {
   getProducts,
   getProductDetail,
   searchProducts,
+  thumbnailUrl,
   imageUrl,
 } from "@/lib/api";
 import { parseFiltersFromUrl, buildSearchUrl } from "@/lib/utils";
@@ -19,7 +20,7 @@ import type { ProductSummary, ProductDetail, FilterMap } from "@/types";
 const PAGE_SIZE = 12;
 
 export function HomeClient() {
-  // — State —
+  // ----------------------------------------------------------------- state
   const [importOpen, setImportOpen] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [uploadedImage, setUploadedImage] = useState("");
@@ -33,137 +34,154 @@ export function HomeClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
 
+  // preview usa imagem de OUTPUT (alta qualidade)
   const [selectedImage, setSelectedImage] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<ProductDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
-
-  // Similar products state
   const [similarProducts, setSimilarProducts] = useState<ProductSummary[]>([]);
 
-  // Derived
   const isInSearch = !!(searchText.trim() || imageFileRef.current);
   const debouncedSearch = useDebounce(searchText, 500);
 
-  // — URL sync —
+  // ------------------------------------------------------------ URL sync
   const pushUrl = useCallback(
     (opts: { q?: string; page?: number; img?: string; filters?: FilterMap }) => {
-      const url = buildSearchUrl(opts);
-      window.history.replaceState(null, "", url);
+      window.history.replaceState(null, "", buildSearchUrl(opts));
     },
     []
   );
 
-  // — Load gallery —
+  // --------------------------------------------------------- load gallery
   const loadGallery = useCallback(
     async (p = page, f = filters) => {
       setIsLoading(true);
-      const data = await getProducts(p, PAGE_SIZE, f);
-      setProducts(
-        data.items.map((item) => ({
-          ...item,
-          imagem_url: imageUrl(item.id_produto),
-        }))
-      );
-      setTotal(data.total);
-      setTotalPages(data.total_pages);
-      setIsLoading(false);
+      try {
+        const data = await getProducts(p, PAGE_SIZE, f);
+        // O backend já devolve imagem_url apontando para thumbnail
+        setProducts(data.items);
+        setTotal(data.total);
+        setTotalPages(data.total_pages);
+      } finally {
+        setIsLoading(false);
+      }
     },
     [page, filters]
   );
 
-  // — Run search —
+  // ------------------------------------------------------------ run search
   const runSearch = useCallback(
     async (q: string, f = filters) => {
       setIsSearching(true);
-      const data = await searchProducts(
-        q || undefined,
-        imageFileRef.current,
-        12,
-        f
-      );
+      try {
+        const data = await searchProducts(q || undefined, imageFileRef.current, 12, f);
 
-      const enriched = await Promise.all(
-        data.items.map(async (item) => {
-          const detail = await getProductDetail(item.id_produto);
-          return {
-            id_produto: item.id_produto,
-            imagem_url: imageUrl(item.id_produto),
-            nome_produto: detail?.nome_produto ?? "",
-            marca: detail?.marca ?? "",
-            categoria_principal: detail?.categoria_principal ?? "",
-            faixa_preco: detail?.faixa_preco ?? "",
-            altura_cm: detail?.altura_cm ?? "",
-            largura_cm: detail?.largura_cm ?? "",
-            profundidade_cm: detail?.profundidade_cm ?? "",
-          };
-        })
-      );
+        // enrich search results (search endpoint returns only id)
+        const enriched = await Promise.all(
+          data.items.map(async (item) => {
+            const detail = await getProductDetail(item.id_produto);
+            return {
+              id_produto:          item.id_produto,
+              imagem_url:          thumbnailUrl(item.id_produto), // thumbnail no grid
+              nome_produto:        detail?.nome_produto        ?? "",
+              marca:               detail?.marca               ?? "",
+              categoria_principal: detail?.categoria_principal ?? "",
+              faixa_preco:         detail?.faixa_preco         ?? "",
+              altura_cm:           detail?.altura_cm,
+              largura_cm:          detail?.largura_cm,
+              profundidade_cm:     detail?.profundidade_cm,
+            } satisfies ProductSummary;
+          })
+        );
 
-      setProducts(enriched);
-      setTotal(data.total);
-      setTotalPages(1);
-      setIsSearching(false);
+        setProducts(enriched);
+        setTotal(data.total);
+        setTotalPages(1);
+      } finally {
+        setIsSearching(false);
+      }
     },
     [filters]
   );
 
-  // — Fetch similar products for a given product id —
-  const loadSimilar = useCallback(async (productId: string | number, currentImage: string) => {
-    setSimilarProducts([]);
-    try {
-      // Use the product image as query for visual similarity
-      const imgRes = await fetch(currentImage, { mode: "cors" });
-      const blob = await imgRes.blob();
-      const file = new File([blob], "query.jpg", { type: "image/jpeg" });
-
-      const data = await searchProducts(undefined, file, 10);
-
-      // Enrich and exclude the current product
-      const enriched = await Promise.all(
-        data.items
-          .filter((item) => String(item.id_produto) !== String(productId))
-          .slice(0, 6)
-          .map(async (item) => {
-            const detail = await getProductDetail(item.id_produto);
-            return {
-              id_produto: item.id_produto,
-              imagem_url: imageUrl(item.id_produto),
-              nome_produto: detail?.nome_produto ?? "",
-              marca: detail?.marca ?? "",
-              categoria_principal: detail?.categoria_principal ?? "",
-              faixa_preco: detail?.faixa_preco ?? "",
-              altura_cm: detail?.altura_cm ?? "",
-              largura_cm: detail?.largura_cm ?? "",
-              profundidade_cm: detail?.profundidade_cm ?? "",
-            };
-          })
-      );
-
-      setSimilarProducts(enriched);
-    } catch {
+  // ------------------------------------------------------- similar products
+  const loadSimilar = useCallback(
+    async (productId: string | number, outputImgUrl: string) => {
       setSimilarProducts([]);
+      try {
+        const imgRes = await fetch(outputImgUrl, { mode: "cors" });
+        const blob = await imgRes.blob();
+        const file = new File([blob], "query.jpg", { type: "image/jpeg" });
+
+        const data = await searchProducts(undefined, file, 10);
+
+        const enriched = await Promise.all(
+          data.items
+            .filter((item) => String(item.id_produto) !== String(productId))
+            .slice(0, 6)
+            .map(async (item) => {
+              const detail = await getProductDetail(item.id_produto);
+              return {
+                id_produto:          item.id_produto,
+                imagem_url:          thumbnailUrl(item.id_produto), // thumbnail no strip
+                nome_produto:        detail?.nome_produto        ?? "",
+                marca:               detail?.marca               ?? "",
+                categoria_principal: detail?.categoria_principal ?? "",
+                faixa_preco:         detail?.faixa_preco         ?? "",
+                altura_cm:           detail?.altura_cm,
+                largura_cm:          detail?.largura_cm,
+                profundidade_cm:     detail?.profundidade_cm,
+              } satisfies ProductSummary;
+            })
+        );
+
+        setSimilarProducts(enriched);
+      } catch {
+        setSimilarProducts([]);
+      }
+    },
+    []
+  );
+
+  // ---------------------------------------------------------- load detail
+  const loadDetail = useCallback(async (id: string | number) => {
+    setLoadingDetail(true);
+    try {
+      const detail = await getProductDetail(id);
+      setSelectedProduct(detail);
+    } finally {
+      setLoadingDetail(false);
     }
   }, []);
 
-  // — Load product detail —
-  const loadDetail = useCallback(async (id: string | number) => {
-    setLoadingDetail(true);
-    const detail = await getProductDetail(id);
-    setSelectedProduct(detail);
-    setLoadingDetail(false);
-  }, []);
+  // ---------------------------------------------------- select a product
+  /**
+   * Quando o usuário clica num card do grid:
+   *  - grid usa thumbnail (já está no card)
+   *  - preview recebe a URL de output (alta qualidade)
+   */
+  const openProduct = useCallback(
+    (productId: string | number) => {
+      const outputUrl = imageUrl(productId); // alta qualidade para o preview
+      setSelectedImage(outputUrl);
+      setSelectedProduct(null);
+      setSimilarProducts([]);
+      loadDetail(productId);
+      loadSimilar(productId, outputUrl);
+      return outputUrl;
+    },
+    [loadDetail, loadSimilar]
+  );
 
-  // — On mount: restore from URL —
+  // --------------------------------------------------------- on mount: URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const q = params.get("q") ?? "";
-    const p = parseInt(params.get("page") ?? "1", 10);
+    const q  = params.get("q")    ?? "";
+    const p  = parseInt(params.get("page") ?? "1", 10);
     const img = params.get("img") ?? "";
-    const f = parseFiltersFromUrl(window.location.search);
+    const f  = parseFiltersFromUrl(window.location.search);
 
     setSearchText(q);
     setPage(Math.max(1, p));
-    setSelectedImage(img);
     setFilters(f);
 
     if (q || Object.keys(f).length > 0) {
@@ -171,17 +189,23 @@ export function HomeClient() {
     } else {
       loadGallery(p, f);
     }
+
     if (img) {
+      // tenta extrair o id da URL guardada
       const match = img.match(/\/(\d+)\.jpg$/);
       if (match) {
-        loadDetail(match[1]);
-        loadSimilar(match[1], img);
+        const pid = match[1];
+        setSelectedImage(imageUrl(pid)); // garante URL de output
+        loadDetail(pid);
+        loadSimilar(pid, imageUrl(pid));
+      } else {
+        setSelectedImage(img);
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // — Debounced search trigger —
+  // ----------------------------------------------- debounced text search
   useEffect(() => {
     if (!debouncedSearch.trim() && !imageFileRef.current) {
       loadGallery(1, filters);
@@ -194,7 +218,8 @@ export function HomeClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch]);
 
-  // — Handlers —
+  // ------------------------------------------------------------- handlers
+
   const handleSearchChange = (text: string) => {
     setSearchText(text);
     setPage(1);
@@ -203,7 +228,6 @@ export function HomeClient() {
     setSimilarProducts([]);
   };
 
-  // Called on Enter or history selection — saves to history
   const handleSearchCommit = (text: string) => {
     setSearchText(text);
     runSearch(text, filters);
@@ -234,35 +258,27 @@ export function HomeClient() {
   const handleFilterToggle = (field: string, value: string) => {
     setFilters((prev) => {
       const current = prev[field] ?? [];
-      const next = current.includes(value)
+      const next    = current.includes(value)
         ? current.filter((v) => v !== value)
         : [...current, value];
       const updated = next.length
         ? { ...prev, [field]: next }
         : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== field));
       setPage(1);
-      if (isInSearch) {
-        runSearch(searchText, updated);
-      } else {
-        loadGallery(1, updated);
-      }
+      if (isInSearch) runSearch(searchText, updated);
+      else            loadGallery(1, updated);
       pushUrl({ q: searchText, filters: updated });
       return updated;
     });
   };
 
-  const handleFilterRemove = (field: string, value: string) => {
-    handleFilterToggle(field, value);
-  };
+  const handleFilterRemove   = (field: string, value: string) => handleFilterToggle(field, value);
 
   const handleFilterClearAll = () => {
     setFilters({});
     setPage(1);
-    if (isInSearch) {
-      runSearch(searchText, {});
-    } else {
-      loadGallery(1, {});
-    }
+    if (isInSearch) runSearch(searchText, {});
+    else            loadGallery(1, {});
     pushUrl({ q: searchText });
   };
 
@@ -280,24 +296,13 @@ export function HomeClient() {
   };
 
   const handleSelectProduct = (product: ProductSummary) => {
-    const url = product.imagem_url;
-    setSelectedImage(url);
-    setSelectedProduct(null);
-    setSimilarProducts([]);
-    loadDetail(product.id_produto);
-    loadSimilar(product.id_produto, url);
-    pushUrl({ q: searchText, page, img: url, filters });
+    const outputUrl = openProduct(product.id_produto);
+    pushUrl({ q: searchText, page, img: outputUrl, filters });
   };
 
-  // Selecting a similar product from the floating strip
   const handleSelectSimilar = (product: ProductSummary) => {
-    const url = product.imagem_url;
-    setSelectedImage(url);
-    setSelectedProduct(null);
-    setSimilarProducts([]);
-    loadDetail(product.id_produto);
-    loadSimilar(product.id_produto, url);
-    pushUrl({ q: searchText, page, img: url, filters });
+    const outputUrl = openProduct(product.id_produto);
+    pushUrl({ q: searchText, page, img: outputUrl, filters });
   };
 
   const handlePrevPage = () => {
@@ -315,6 +320,8 @@ export function HomeClient() {
     loadGallery(p, filters);
     pushUrl({ q: searchText, page: p, filters });
   };
+
+  // ------------------------------------------------------------- render
 
   return (
     <div className="min-h-screen bg-firmato-bg">

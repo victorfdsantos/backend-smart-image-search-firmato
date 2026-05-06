@@ -26,19 +26,19 @@ def _resolve(path: str) -> Path:
 
 
 class SharePointSettings:
-    tenant_id:     str  = _cfg.get("sharepoint", "tenant_id")
-    client_id:     str  = _cfg.get("sharepoint", "client_id")
-    # Segredo lido de variável de ambiente — nunca do .ini
-    client_secret: str  = os.getenv("SHAREPOINT_CLIENT_SECRET", "")
-    host:          str  = _cfg.get("sharepoint", "host")
-    site_path:     str  = _cfg.get("sharepoint", "site_path")
-    file_name:     str  = _cfg.get("sharepoint", "file_name")
-    sheet_name:    str  = _cfg.get("sharepoint", "sheet_name")
+    tenant_id:     str = _cfg.get("sharepoint", "tenant_id")
+    client_id:     str = _cfg.get("sharepoint", "client_id")
+    client_secret: str = os.getenv("SHAREPOINT_CLIENT_SECRET", "")
+    host:          str = _cfg.get("sharepoint", "host")
+    site_path:     str = _cfg.get("sharepoint", "site_path")
+    file_name:     str = _cfg.get("sharepoint", "file_name")
+    sheet_name:    str = _cfg.get("sharepoint", "sheet_name")
+
 
 class GeneralSettings:
-    landing_path: Path = _resolve(_cfg.get("general", "landing_path"))
-    data_path: Path = _resolve(_cfg.get("general", "data_path"))
-    logs_path: Path = _resolve(_cfg.get("general", "logs_path"))
+    landing_path:    Path = _resolve(_cfg.get("general", "landing_path"))
+    data_path:       Path = _resolve(_cfg.get("general", "data_path"))
+    logs_path:       Path = _resolve(_cfg.get("general", "logs_path"))
     tmp_images_path: Path = _resolve(_cfg.get("general", "tmp_images_path"))
 
 
@@ -56,82 +56,64 @@ class ImageSettings:
 
 class NasSettings:
     base_path: Path = _resolve(_cfg.get("nas", "base_path"))
- 
+
     @property
     def landing(self) -> Path:
-        """Imagens brutas colocadas pelo usuário."""
         return self.base_path / "landing"
- 
+
     @property
     def output(self) -> Path:
-        """Imagens processadas 1080×1080 (flat — sem subpastas)."""
         return self.base_path / "output"
- 
+
     @property
     def thumbnail(self) -> Path:
-        """Thumbnails 250×250 servidos na UI."""
         return self.base_path / "thumbnail"
- 
+
     @property
     def data(self) -> Path:
-        """JSONs por produto: {id}.json."""
         return self.base_path / "data"
- 
+
     @property
     def utils(self) -> Path:
-        """Arquivos auxiliares: filters.json, catalog_mirror.csv."""
         return self.base_path / "utils"
 
-class ImageSettings:
-    thumb_width:  int = _cfg.getint("image", "thumb_width")
-    thumb_height: int = _cfg.getint("image", "thumb_height")
-    output_width:  int = _cfg.getint("image", "output_width")
-    output_height: int = _cfg.getint("image", "output_height")
-    jpeg_quality:  int = _cfg.getint("image", "jpeg_quality")
-    allowed_extensions: list[str] = [
-        e.strip().lower()
-        for e in _cfg.get("image", "allowed_extensions").split(",")
-    ]
 
 class HashSettings:
     hash_columns: list[str] = [
         c.strip() for c in _cfg.get("hash", "hash_columns").split(",")
     ]
 
+
 class AzureSettings:
     connection_string: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
 
+
 class EmbeddingsSettings:
-    npy_path: Path = _resolve(_cfg.get("embeddings", "npy_path"))
+    npy_path:      Path = _resolve(_cfg.get("embeddings", "npy_path"))
     metadata_path: Path = _resolve(_cfg.get("embeddings", "metadata_path"))
+
 
 class ModelSettings:
     clip_model_name: str = _cfg.get(
-        "models",
-        "clip_model_name",
+        "models", "clip_model_name",
         fallback="openai/clip-vit-large-patch14"
     )
     st_model_name: str = _cfg.get(
-        "models",
-        "st_model_name",
+        "models", "st_model_name",
         fallback="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     )
-    device: str = _cfg.get(
-        "models",
-        "device",
-        fallback="cpu"
-    )
+    device: str = _cfg.get("models", "device", fallback="cpu")
+
 
 class Settings:
-    general = GeneralSettings()
+    general    = GeneralSettings()
     sharepoint = SharePointSettings()
-    image = ImageSettings()
-    nas = NasSettings()
-    hash = HashSettings()
+    image      = ImageSettings()
+    nas        = NasSettings()
+    hash       = HashSettings()
     embeddings = EmbeddingsSettings()
-    azure = AzureSettings()
-    models = ModelSettings()
+    azure      = AzureSettings()
+    models     = ModelSettings()
+
 
 settings = Settings()
-
-

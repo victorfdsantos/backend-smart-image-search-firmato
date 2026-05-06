@@ -1,11 +1,10 @@
-"""ProductController — rotas de listagem e detalhe de produtos."""
+"""ProductController — listagem, detalhe e imagens de produtos."""
 
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Query, Response, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi.responses import JSONResponse
 
-from config.settings import settings
 from services.filter_service import FilterService
 from services.product_service import ProductService
 from utils.logger import setup_logger
@@ -15,51 +14,46 @@ router = APIRouter(prefix="/products", tags=["Products"])
 _DEFAULT_PAGE_SIZE = 12
 
 
+# ================================================================== LIST
+
 @router.get("")
 async def list_products(
     request: Request,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=100),
-    marca: Optional[str] = Query(default=None),
-    categoria_principal: Optional[str] = Query(default=None),
-    subcategoria: Optional[str] = Query(default=None),
-    faixa_preco: Optional[str] = Query(default=None),
-    ambiente: Optional[str] = Query(default=None),
-    forma: Optional[str] = Query(default=None),
-    material_principal: Optional[str] = Query(default=None),
+    page:                int            = Query(default=1,                   ge=1),
+    page_size:           int            = Query(default=_DEFAULT_PAGE_SIZE,  ge=1, le=100),
+    marca:               Optional[str]  = Query(default=None),
+    categoria_principal: Optional[str]  = Query(default=None),
+    subcategoria:        Optional[str]  = Query(default=None),
+    faixa_preco:         Optional[str]  = Query(default=None),
+    ambiente:            Optional[str]  = Query(default=None),
+    forma:               Optional[str]  = Query(default=None),
+    material_principal:  Optional[str]  = Query(default=None),
 ) -> JSONResponse:
 
     logger = setup_logger("product_list")
 
     raw = {
-        "marca": marca,
+        "marca":               marca,
         "categoria_principal": categoria_principal,
-        "subcategoria": subcategoria,
-        "faixa_preco": faixa_preco,
-        "ambiente": ambiente,
-        "forma": forma,
-        "material_principal": material_principal,
+        "subcategoria":        subcategoria,
+        "faixa_preco":         faixa_preco,
+        "ambiente":            ambiente,
+        "forma":               forma,
+        "material_principal":  material_principal,
     }
-
     active_filters = {
         k: [v.strip() for v in val.split(",") if v.strip()]
         for k, val in raw.items()
         if val and val.strip()
     }
 
-    logger.info(f"[Filter] active_filters={active_filters}")
-
-    allowed_ids = None
+    allowed_ids: Optional[set] = None
     if active_filters:
         filter_service = FilterService(logger)
         allowed_ids = filter_service.get_filtered_ids(active_filters)
-        logger.info(f"[Filter] allowed_ids={allowed_ids}")
+        logger.info(f"[Products] Filtros={active_filters} → {len(allowed_ids)} ids")
 
-    service = ProductService(
-        logger=logger,
-        blob_repo=request.app.state.blob_repo
-    )
-
+    service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
     result = await service.list_active(
         page=page,
         page_size=page_size,
@@ -69,43 +63,62 @@ async def list_products(
     return JSONResponse(content=result)
 
 
+# ================================================================= DETAIL
+
 @router.get("/{product_id}")
 async def get_product(request: Request, product_id: int) -> JSONResponse:
     logger = setup_logger("product_detail")
-
-    service = ProductService(
-        logger=logger,
-        blob_repo=request.app.state.blob_repo
-    )
+    service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
 
     product = await service.get_by_id(product_id)
-
     if product is None:
         raise HTTPException(status_code=404, detail=f"Produto {product_id} não encontrado.")
 
     return JSONResponse(content=product)
 
 
-@router.get("/images/{filename}", tags=["Images"])
-async def get_image(request: Request, filename: str):
+# ============================================================= THUMBNAIL
+# Usado pelo grid de produtos — imagem pequena (rápida)
 
-    if "/" in filename or "\\" in filename or ".." in filename:
-        raise HTTPException(status_code=400, detail="Nome de arquivo inválido.")
+@router.get("/thumbnail/{filename}", tags=["Images"])
+async def get_thumbnail(request: Request, filename: str) -> Response:
+    _validate_filename(filename)
+    logger = setup_logger("product_thumbnail")
+    service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
 
-    logger = setup_logger("product_image")
-
-    service = ProductService(
-        logger=logger,
-        blob_repo=request.app.state.blob_repo
-    )
-
-    data = await service.get_image(filename)
-
+    data = await service.get_thumbnail(filename)
     if not data:
-        raise HTTPException(status_code=404, detail="Imagem não encontrada")
+        raise HTTPException(status_code=404, detail="Thumbnail não encontrada.")
 
     return Response(
         content=data,
         media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"}
+        headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+# =============================================================== OUTPUT
+# Usado pelo painel de preview — imagem em alta qualidade
+
+@router.get("/images/{filename}", tags=["Images"])
+async def get_output_image(request: Request, filename: str) -> Response:
+    _validate_filename(filename)
+    logger = setup_logger("product_image")
+    service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
+
+    data = await service.get_image(filename)
+    if not data:
+        raise HTTPException(status_code=404, detail="Imagem não encontrada.")
+
+    return Response(
+        content=data,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+# ---------------------------------------------------------------- HELPER
+
+def _validate_filename(filename: str) -> None:
+    if "/" in filename or "\\" in filename or ".." in filename:
+        raise HTTPException(status_code=400, detail="Nome de arquivo inválido.")
