@@ -3,17 +3,19 @@ fastapi==0.135.1
 uvicorn==0.41.0
 python-multipart==0.0.22
 
-# Pydantic (FastAPI dependency)
+# Pydantic
 pydantic>=2.0.0
 
 # ML / Embeddings
-transformers==4.57.6
-sentence-transformers==3.4.1
+transformers==4.47.1
+sentence-transformers==3.3.1
 rank-bm25==0.2.2
-numpy==1.26.4
+numpy==2.2.6
+scipy==1.15.3
 
 # Image
 pillow==11.2.1
 
+# Azure
 azure-storage-blob==12.19.1
 azure-identity==1.17.1

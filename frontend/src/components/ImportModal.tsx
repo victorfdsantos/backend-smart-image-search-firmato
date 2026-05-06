@@ -41,7 +41,7 @@ export function ImportModal({ open, onClose }: ImportModalProps) {
     setState({ kind: "uploading" });
 
     try {
-      const result = await fetch("/backend/catalog/register", {
+      const result = await fetch("/api/catalog/register", {
         method: "POST",
       }).then(res => res.json());
 
@@ -59,7 +59,7 @@ export function ImportModal({ open, onClose }: ImportModalProps) {
   const doRetrain = async () => {
     setState({ kind: "retraining" });
     try {
-      const res = await fetch("/backend/catalog/retrain", { method: "POST" });
+      const res = await fetch("/api/catalog/retrain", { method: "POST" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setState({ kind: "success" });
     } catch (e) {

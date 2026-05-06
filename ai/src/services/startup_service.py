@@ -1,13 +1,12 @@
-"""StartupService — carrega modelos CLIP, ST e índices na inicialização."""
+"""
+StartupService do AI Service.
 
-import json
+Única responsabilidade: carregar os modelos CLIP e ST na memória.
+Índices (embeddings, metadata, bm25) são gerenciados pelo IndexService
+a cada chamada de /training — não precisam ser carregados no startup.
+"""
+
 import logging
-import pickle
-from pathlib import Path
-
-import numpy as np
-
-from config.settings import settings
 
 
 class StartupService:
@@ -16,124 +15,82 @@ class StartupService:
         self.logger = logger
 
     def run(self, app_state: dict) -> None:
-        """Carrega todos os recursos na inicialização da API."""
-        self._load_indices(app_state)
+        """
+        Levanta RuntimeError se qualquer modelo não carregar —
+        a API não deve subir com modelos None.
+        """
         self._load_clip(app_state)
         self._load_st(app_state)
-        self.logger.info("[Startup] AI Service pronto.")
 
-    # ------------------------------------------------------------------
-    # Índices (embeddings + metadata + BM25)
-    # ------------------------------------------------------------------
+        missing = [
+            name for name in ("clip_model", "clip_processor", "st_model")
+            if app_state.get(name) is None
+        ]
+        if missing:
+            raise RuntimeError(
+                f"Modelos não carregaram: {', '.join(missing)}. "
+                "Verifique conectividade com Hugging Face e espaço em disco."
+            )
 
-    def _load_indices(self, app_state: dict) -> None:
-        emb = settings.embeddings
-
-        # Defaults
-        app_state["clip_embeddings"] = None
-        app_state["text_embeddings"] = None
-        app_state["metadata"] = []
-        app_state["bm25"] = None
-        app_state["bm25_corpus"] = []
-
-        # CLIP embeddings
-        if emb.clip_npy.exists():
-            try:
-                app_state["clip_embeddings"] = np.load(str(emb.clip_npy))
-                self.logger.info(
-                    f"[Startup] clip_embeddings carregado: shape={app_state['clip_embeddings'].shape}"
-                )
-            except Exception as e:
-                self.logger.warning(f"[Startup] Falha ao carregar clip_embeddings: {e}")
-        else:
-            self.logger.warning(f"[Startup] clip_embeddings.npy não encontrado em {emb.clip_npy}")
-
-        # Text embeddings
-        if emb.text_npy.exists():
-            try:
-                app_state["text_embeddings"] = np.load(str(emb.text_npy))
-                self.logger.info(
-                    f"[Startup] text_embeddings carregado: shape={app_state['text_embeddings'].shape}"
-                )
-            except Exception as e:
-                self.logger.warning(f"[Startup] Falha ao carregar text_embeddings: {e}")
-        else:
-            self.logger.warning(f"[Startup] text_embeddings.npy não encontrado em {emb.text_npy}")
-
-        # Metadata
-        if emb.metadata_json.exists():
-            try:
-                with open(emb.metadata_json, encoding="utf-8") as f:
-                    app_state["metadata"] = json.load(f)
-                self.logger.info(
-                    f"[Startup] metadata carregado: {len(app_state['metadata'])} entradas"
-                )
-            except Exception as e:
-                self.logger.warning(f"[Startup] Falha ao carregar metadata: {e}")
-        else:
-            self.logger.warning(f"[Startup] metadata_index.json não encontrado em {emb.metadata_json}")
-
-        # BM25
-        if emb.bm25_pkl.exists():
-            try:
-                with open(emb.bm25_pkl, "rb") as f:
-                    data = pickle.load(f)
-                app_state["bm25"] = data["bm25"]
-                app_state["bm25_corpus"] = data["corpus"]
-                self.logger.info(
-                    f"[Startup] BM25 carregado: {len(app_state['bm25_corpus'])} documentos"
-                )
-            except Exception as e:
-                self.logger.warning(f"[Startup] Falha ao carregar BM25: {e}")
-        else:
-            self.logger.warning(f"[Startup] bm25_index.pkl não encontrado em {emb.bm25_pkl}")
+        self.logger.info("[Startup] AI Service pronto — CLIP e ST carregados.")
 
     # ------------------------------------------------------------------
     # CLIP
     # ------------------------------------------------------------------
 
     def _load_clip(self, app_state: dict) -> None:
+        app_state.update({"clip_model": None, "clip_processor": None, "clip_device": "cpu"})
+
         try:
             import torch
             from transformers import CLIPModel, CLIPProcessor
+            from config.settings import settings
 
             model_name = settings.models.clip_model_name
-            device_cfg = settings.models.device
-            import torch
-            device = "cuda" if (device_cfg == "cuda" and torch.cuda.is_available()) else "cpu"
+            device     = "cuda" if (settings.models.device == "cuda" and torch.cuda.is_available()) else "cpu"
 
-            app_state["clip_model"] = (
-                CLIPModel.from_pretrained(model_name).to(device).eval()
-            )
-            app_state["clip_processor"] = CLIPProcessor.from_pretrained(
-                model_name, clean_up_tokenization_spaces=True
-            )
-            app_state["clip_device"] = device
-            self.logger.info(f"[Startup] CLIP carregado: {model_name} | device={device}")
+            self.logger.info(f"[Startup] Carregando CLIP: {model_name} | device={device}")
+
+            model     = CLIPModel.from_pretrained(model_name).to(device).eval()
+            processor = CLIPProcessor.from_pretrained(model_name, clean_up_tokenization_spaces=True)
+
+            # smoke test
+            from PIL import Image as PILImage
+            dummy = processor(images=PILImage.new("RGB", (224, 224)), return_tensors="pt").to(device)
+            with torch.no_grad():
+                model.get_image_features(**dummy)
+
+            app_state["clip_model"]     = model
+            app_state["clip_processor"] = processor
+            app_state["clip_device"]    = device
+
+            self.logger.info(f"[Startup] CLIP OK | device={device}")
 
         except Exception as e:
-            self.logger.warning(f"[Startup] Falha ao carregar CLIP: {e}")
-            app_state["clip_model"] = None
-            app_state["clip_processor"] = None
-            app_state["clip_device"] = "cpu"
+            self.logger.error(f"[Startup] FALHA ao carregar CLIP: {e}", exc_info=True)
 
     # ------------------------------------------------------------------
-    # Sentence-Transformers
+    # SENTENCE-TRANSFORMERS
     # ------------------------------------------------------------------
 
     def _load_st(self, app_state: dict) -> None:
+        app_state["st_model"] = None
+
         try:
             from sentence_transformers import SentenceTransformer
+            from config.settings import settings
             import torch
 
             model_name = settings.models.st_model_name
-            device_cfg = settings.models.device
-            device = "cuda" if (device_cfg == "cuda" and torch.cuda.is_available()) else "cpu"
+            device     = "cuda" if (settings.models.device == "cuda" and torch.cuda.is_available()) else "cpu"
 
-            app_state["st_model"] = SentenceTransformer(model_name, device=device)
+            self.logger.info(f"[Startup] Carregando ST: {model_name} | device={device}")
 
-            self.logger.info(f"[Startup] ST carregado: {model_name} | device={device}")
+            model = SentenceTransformer(model_name, device=device)
+            model.encode("teste", normalize_embeddings=True)  # smoke test
+
+            app_state["st_model"] = model
+            self.logger.info(f"[Startup] ST OK | model={model_name}")
 
         except Exception as e:
-            self.logger.warning(f"[Startup] Falha ao carregar ST: {e}")
-            app_state["st_model"] = None
+            self.logger.error(f"[Startup] FALHA ao carregar ST: {e}", exc_info=True)

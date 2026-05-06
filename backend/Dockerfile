@@ -58,6 +58,6 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 CMD ["uvicorn", "main:app", "--reload", \
      "--host", "0.0.0.0", \
      "--port", "8000", \
-     "--workers", "2", \
+     "--workers", "1", \
      "--log-level", "info", \
      "--no-access-log"]
