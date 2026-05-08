@@ -20,6 +20,8 @@ from typing import Optional
 
 import numpy as np
 
+from services.filter_index_service import FilterIndexService
+
 TEXT_FIELDS = [
     "nome_produto", "marca", "categoria_principal", "subcategoria",
     "ambiente", "forma",
@@ -51,6 +53,14 @@ def _build_text(data: dict, pid: str) -> str:
         if v:
             parts.append(f"{label} {v}")
     return " | ".join(parts) if parts else f"produto {pid}"
+
+
+def _clean(val) -> str:
+    """Normaliza um valor de campo para string limpa (sem nan/None)."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s.lower() in ("nan", "none", "") else s
 
 
 class IndexService:
@@ -130,6 +140,11 @@ class IndexService:
         self.logger.info("[Index] Persistindo...")
         self._persist(clip_arr, text_arr, metadata, bm25_corpus)
 
+        # ── reconstrói índice de filtros e salva no Blob ───────────────
+        filter_svc = FilterIndexService(logger=self.logger, repo=self.repo)
+        filter_index = filter_svc.rebuild(metadata)
+        self.state["filter_index"] = filter_index
+
         self.logger.info(f"[Index] Finalizado | stats={stats}")
         return stats
 
@@ -207,10 +222,18 @@ class IndexService:
         # upsert no metadata
         is_new     = pid not in id_to_pos
         meta_entry = {
-            "id":          pid,
-            "imagem":      f"{pid}.jpg",
-            "json":        f"{pid}.json",
-            "text_corpus": text,
+            "id":                  pid,
+            "imagem":              f"{pid}.jpg",
+            "json":                f"{pid}.json",
+            "text_corpus":         text,
+            # campos de filtro — usados pelo FilterIndexService
+            "marca":               _clean(data.get("marca")),
+            "categoria_principal": _clean(data.get("categoria_principal")),
+            "subcategoria":        _clean(data.get("subcategoria")),
+            "faixa_preco":         _clean(data.get("faixa_preco")),
+            "ambiente":            _clean(data.get("ambiente")),
+            "forma":               _clean(data.get("forma")),
+            "material_principal":  _clean(data.get("material_principal")),
         }
 
         if is_new:

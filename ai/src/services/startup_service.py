@@ -8,6 +8,8 @@ a cada chamada de /training — não precisam ser carregados no startup.
 
 import logging
 
+from services.filter_index_service import FilterIndexService
+
 
 class StartupService:
 
@@ -32,7 +34,23 @@ class StartupService:
                 "Verifique conectividade com Hugging Face e espaço em disco."
             )
 
-        self.logger.info("[Startup] AI Service pronto — CLIP e ST carregados.")
+        self._load_filter_index(app_state)
+        self.logger.info("[Startup] AI Service pronto — CLIP, ST e filter_index carregados.")
+
+    def _load_filter_index(self, app_state: dict) -> None:
+        """
+        Tenta carregar o índice de filtros já construído do Blob.
+        Se não existir (primeira execução) define como None —
+        será populado após o primeiro treino.
+        """
+        repo = app_state.get("blob_repo")
+        if repo is None:
+            self.logger.warning("[Startup] blob_repo não disponível no app_state — filter_index não carregado.")
+            app_state["filter_index"] = None
+            return
+
+        svc = FilterIndexService(logger=self.logger, repo=repo)
+        app_state["filter_index"] = svc.load()
 
     # ------------------------------------------------------------------
     # CLIP

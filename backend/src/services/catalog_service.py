@@ -6,7 +6,6 @@ Regras de async:
   - SharePointRepository   → sync   (usa requests)  → chamado com asyncio.to_thread
   - ImageProcessingService → sync
   - ProductDataService     → sync
-  - FilterService          → sync
 """
 
 import asyncio
@@ -16,18 +15,19 @@ from pathlib import Path
 from config.settings import settings
 
 _HASH_COLUMNS = settings.hash.hash_columns
-_CONTAINER = "firmato-catalogo"
+_CONTAINER    = "firmato-catalogo"
 
 
 class CatalogService:
 
-    def __init__(self, logger, sp_repo, blob_repo, image_service, data_service, filter_service):
-        self.logger       = logger
-        self.sp           = sp_repo          # síncrono
-        self.blob         = blob_repo        # assíncrono
-        self.image        = image_service    # síncrono
-        self.data         = data_service     # síncrono
-        self.filter       = filter_service   # síncrono
+    def __init__(self, logger, sp_repo, blob_repo, image_service, data_service, filter_service=None):
+        self.logger  = logger
+        self.sp      = sp_repo        # síncrono
+        self.blob    = blob_repo      # assíncrono
+        self.image   = image_service  # síncrono
+        self.data    = data_service   # síncrono
+        # filter_service mantido na assinatura por compatibilidade mas não usado aqui —
+        # o filter_index é gerenciado pelo AI e recarregado no catalog_controller
 
     # ================================================================ PROCESS
 
@@ -38,17 +38,16 @@ class CatalogService:
             "errors":      0,
             "updated_ids": [],
         }
-        sharepoint_updates: list[dict] = []
-        landing_map:        dict[str, str] = {}
+        sharepoint_updates: list[dict]      = []
+        landing_map:        dict[str, str]  = {}
 
-        # ----- carrega hash index e linhas do SP em paralelo -----
         hash_index, rows, blobs = await asyncio.gather(
             self._load_hash_index(),
             asyncio.to_thread(self.sp.list_rows),
             self.blob.list_blobs(_CONTAINER, "landing/"),
         )
 
-        # monta índice de blobs por stem (sem extensão, lower)
+        # índice de blobs por stem (sem extensão, lower)
         blob_index: dict[str, list[str]] = {}
         for b in blobs:
             key = Path(b).stem.lower()
@@ -73,7 +72,7 @@ class CatalogService:
                     stats["errors"] += 1
                     continue
 
-                base_name = Path(str(img_raw)).stem.lower()
+                base_name  = Path(str(img_raw)).stem.lower()
                 candidates = blob_index.get(base_name)
 
                 if not candidates:
@@ -83,20 +82,18 @@ class CatalogService:
                     stats["errors"] += 1
                     continue
 
-                img_name = candidates[0]
+                img_name  = candidates[0]
                 img_bytes = await self.blob.download(_CONTAINER, img_name)
 
-                # processamento síncrono → thread pool
                 output_bytes, thumb_bytes = await asyncio.to_thread(
                     self.image.process, img_bytes, pid
                 )
 
                 fname = f"{pid}.jpg"
 
-                # uploads em paralelo
                 product = await asyncio.to_thread(self.data.row_to_model, row)
-                product.chave_especial   = new_hash
-                product.caminho_output   = f"output/{fname}"
+                product.chave_especial    = new_hash
+                product.caminho_output    = f"output/{fname}"
                 product.caminho_thumbnail = f"thumbnail/{fname}"
 
                 product_json = json.dumps(product.model_dump()).encode()
@@ -143,7 +140,6 @@ class CatalogService:
         hash_index:         dict,
     ) -> None:
         try:
-            # move staging → produção + deleta landing em paralelo por produto
             move_tasks = []
             for pid in updated_ids:
                 fname = f"{pid}.jpg"
@@ -161,9 +157,9 @@ class CatalogService:
             # limpa staging
             await self._clear_staging(updated_ids)
 
-            # reconstrói índice de filtros
-            rows = await asyncio.to_thread(self.sp.list_rows)
-            await asyncio.to_thread(self.filter.build, rows)
+            # NOTA: filter_index NÃO é reconstruído aqui.
+            # É reconstruído pelo AI durante o treino (FilterIndexService.rebuild)
+            # e recarregado no catalog_controller após o treino terminar.
 
         except Exception as exc:
             self.logger.error(f"[Catalog] Commit falhou: {exc}", exc_info=True)
@@ -172,7 +168,6 @@ class CatalogService:
     # ================================================================ HELPERS
 
     async def _promote_product(self, pid: str, fname: str, original_blob: str | None) -> None:
-        """Move output/thumbnail/data de staging para produção e apaga landing."""
         tasks = [
             self._move("output_staging",    "output",    fname),
             self._move("thumbnail_staging", "thumbnail", fname),

@@ -19,15 +19,15 @@ _DEFAULT_PAGE_SIZE = 12
 @router.get("")
 async def list_products(
     request: Request,
-    page:                int            = Query(default=1,                   ge=1),
-    page_size:           int            = Query(default=_DEFAULT_PAGE_SIZE,  ge=1, le=100),
-    marca:               Optional[str]  = Query(default=None),
-    categoria_principal: Optional[str]  = Query(default=None),
-    subcategoria:        Optional[str]  = Query(default=None),
-    faixa_preco:         Optional[str]  = Query(default=None),
-    ambiente:            Optional[str]  = Query(default=None),
-    forma:               Optional[str]  = Query(default=None),
-    material_principal:  Optional[str]  = Query(default=None),
+    page:                int           = Query(default=1,                  ge=1),
+    page_size:           int           = Query(default=_DEFAULT_PAGE_SIZE, ge=1, le=100),
+    marca:               Optional[str] = Query(default=None),
+    categoria_principal: Optional[str] = Query(default=None),
+    subcategoria:        Optional[str] = Query(default=None),
+    faixa_preco:         Optional[str] = Query(default=None),
+    ambiente:            Optional[str] = Query(default=None),
+    forma:               Optional[str] = Query(default=None),
+    material_principal:  Optional[str] = Query(default=None),
 ) -> JSONResponse:
 
     logger = setup_logger("product_list")
@@ -49,15 +49,18 @@ async def list_products(
 
     allowed_ids: Optional[set] = None
     if active_filters:
-        filter_service = FilterService(logger)
+        filter_service = FilterService(
+            logger       = logger,
+            filter_index = request.app.state.filter_index,
+        )
         allowed_ids = filter_service.get_filtered_ids(active_filters)
         logger.info(f"[Products] Filtros={active_filters} → {len(allowed_ids)} ids")
 
     service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
-    result = await service.list_active(
-        page=page,
-        page_size=page_size,
-        allowed_ids=allowed_ids,
+    result  = await service.list_active(
+        page       = page,
+        page_size  = page_size,
+        allowed_ids = allowed_ids,
     )
 
     return JSONResponse(content=result)
@@ -67,7 +70,7 @@ async def list_products(
 
 @router.get("/{product_id}")
 async def get_product(request: Request, product_id: int) -> JSONResponse:
-    logger = setup_logger("product_detail")
+    logger  = setup_logger("product_detail")
     service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
 
     product = await service.get_by_id(product_id)
@@ -78,12 +81,11 @@ async def get_product(request: Request, product_id: int) -> JSONResponse:
 
 
 # ============================================================= THUMBNAIL
-# Usado pelo grid de produtos — imagem pequena (rápida)
 
 @router.get("/thumbnail/{filename}", tags=["Images"])
 async def get_thumbnail(request: Request, filename: str) -> Response:
     _validate_filename(filename)
-    logger = setup_logger("product_thumbnail")
+    logger  = setup_logger("product_thumbnail")
     service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
 
     data = await service.get_thumbnail(filename)
@@ -91,19 +93,18 @@ async def get_thumbnail(request: Request, filename: str) -> Response:
         raise HTTPException(status_code=404, detail="Thumbnail não encontrada.")
 
     return Response(
-        content=data,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        content    = data,
+        media_type = "image/jpeg",
+        headers    = {"Cache-Control": "public, max-age=86400"},
     )
 
 
 # =============================================================== OUTPUT
-# Usado pelo painel de preview — imagem em alta qualidade
 
 @router.get("/images/{filename}", tags=["Images"])
 async def get_output_image(request: Request, filename: str) -> Response:
     _validate_filename(filename)
-    logger = setup_logger("product_image")
+    logger  = setup_logger("product_image")
     service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
 
     data = await service.get_image(filename)
@@ -111,9 +112,9 @@ async def get_output_image(request: Request, filename: str) -> Response:
         raise HTTPException(status_code=404, detail="Imagem não encontrada.")
 
     return Response(
-        content=data,
-        media_type="image/jpeg",
-        headers={"Cache-Control": "public, max-age=86400"},
+        content    = data,
+        media_type = "image/jpeg",
+        headers    = {"Cache-Control": "public, max-age=86400"},
     )
 
 

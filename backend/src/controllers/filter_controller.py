@@ -1,6 +1,6 @@
 """FilterController — endpoint para opções de filtro em cascata."""
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 from typing import Optional
 
@@ -20,6 +20,7 @@ router = APIRouter(prefix="/filters", tags=["Filters"])
     ),
 )
 async def get_filter_options(
+    request: Request,
     marca:               Optional[str] = Query(default=None),
     categoria_principal: Optional[str] = Query(default=None),
     subcategoria:        Optional[str] = Query(default=None),
@@ -30,7 +31,6 @@ async def get_filter_options(
 ) -> JSONResponse:
     logger = setup_logger("filter_options")
 
-    # Monta dict de filtros ativos (ignora vazios)
     raw = {
         "marca":               marca,
         "categoria_principal": categoria_principal,
@@ -46,11 +46,15 @@ async def get_filter_options(
         if val and val.strip()
     }
 
-    service = FilterService(logger)
+    # lê o índice já construído do app_state (carregado no startup do Blob)
+    service = FilterService(
+        logger       = logger,
+        filter_index = request.app.state.filter_index,
+    )
     options = service.get_options(active_filters)
 
     return JSONResponse(content={
-        "fields": FILTER_FIELDS,
-        "options": options,
+        "fields":         FILTER_FIELDS,
+        "options":        options,
         "active_filters": active_filters,
     })
