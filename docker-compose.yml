@@ -19,13 +19,6 @@ services:
     volumes:
       - ./backend/src/config.ini:/app/src/config.ini:ro
       - ./backend/src/config:/app/src/config
-      - ./nas/landing:/app/src/nas/landing
-      - ./nas/data:/app/src/nas/data
-      - ./nas/output:/app/src/nas/output
-      - ./nas/thumbnail:/app/src/nas/thumbnail
-      - ./nas/utils:/app/src/nas/utils
-      - ./nas/embeddings:/app/src/nas/embeddings
-      - ./nas/logs:/app/src/nas/logs
       - clip_cache:/app/.cache/huggingface
     tmpfs:
       - /app/src/tmp_images:size=512m,uid=1000,gid=1000
@@ -40,7 +33,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 4G
+          memory: 2G
         reservations:
           memory: 1G
     networks:
@@ -69,10 +62,6 @@ services:
       - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
     volumes:
       - ./ai/src/config.ini:/app/src/config.ini:ro
-      - ./nas/data:/app/nas/data
-      - ./nas/output:/app/nas/output
-      - ./nas/embeddings:/app/nas/embeddings
-      - ./nas/logs:/app/nas/logs
       - clip_cache:/app/.cache/huggingface
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -84,7 +73,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 6G
+          memory: 4G
         reservations:
           memory: 2G
     networks:
