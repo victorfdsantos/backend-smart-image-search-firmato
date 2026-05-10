@@ -76,9 +76,10 @@ async def search(
         clip_device     = request.app.state.clip_device,
         st_model        = request.app.state.st_model,
         bm25            = request.app.state.bm25,
+        blob_repo       = request.app.state.blob_repo,   # ← passa o repo
     )
 
-    results = service.search(
+    results = await service.search(          # ← await (search agora é async)
         query       = q,
         image_bytes = image_bytes,
         top_k       = top_k,

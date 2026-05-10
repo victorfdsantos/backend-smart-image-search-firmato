@@ -12,7 +12,6 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from config.settings import settings
 
 def _minmax(scores: np.ndarray) -> np.ndarray:
     mn, mx = scores.min(), scores.max()
@@ -27,12 +26,15 @@ def _tokenize(text: str) -> list[str]:
 
 class SearchService:
 
+    _CONTAINER = "firmato-catalogo"
+
     def __init__(
         self, logger: logging.Logger,
         clip_embeddings, text_embeddings, metadata,
         clip_model, clip_processor, clip_device,
         st_model=None,
         bm25=None,
+        blob_repo=None,
     ):
         self.logger      = logger
         self.clip_emb    = clip_embeddings
@@ -43,13 +45,13 @@ class SearchService:
         self.clip_device = clip_device
         self.st_model    = st_model
         self.bm25        = bm25
-        self.data_dir    = settings.general.data_path
+        self.blob        = blob_repo  # BlobStorageRepository (async)
 
     # ------------------------------------------------------------------
     # Ponto de entrada
     # ------------------------------------------------------------------
 
-    def search(
+    async def search(
         self,
         query: str = None,
         image_bytes: bytes = None,
@@ -131,7 +133,7 @@ class SearchService:
             if allowed_ids is not None and pid not in {str(x) for x in allowed_ids}:
                 continue
 
-            product = self._load_json(pid)
+            product = await self._load_json(pid)
             if product is None:
                 continue
             if str(product.get("status", "")).strip().lower() != "ativo":
@@ -143,7 +145,7 @@ class SearchService:
                 "score_clip": float(clip_scores[idx]),
                 "score_st":   float(st_scores[idx]),
                 "score_bm25": float(bm25_scores[idx]),
-                "imagem_url": f"/static/images/{pid}.jpg",
+                "imagem_url": f"/api/products/thumbnail/{pid}.jpg",
             })
 
         return results
@@ -182,15 +184,16 @@ class SearchService:
             return None
 
     # ------------------------------------------------------------------
-    # Helper
+    # Helper — lê JSON do produto diretamente do Blob
     # ------------------------------------------------------------------
 
-    def _load_json(self, product_id) -> Optional[dict]:
-        path = self.data_dir / f"{product_id}.json"
-        if not path.exists():
+    async def _load_json(self, product_id: str) -> Optional[dict]:
+        if self.blob is None:
+            self.logger.warning("[Search] blob_repo não disponível — não foi possível carregar JSON do produto.")
             return None
         try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
+            data = await self.blob.download(self._CONTAINER, f"data/{product_id}.json")
+            return json.loads(data)
+        except Exception as exc:
+            self.logger.warning(f"[Search] JSON não encontrado no Blob | pid={product_id}: {exc}")
             return None
