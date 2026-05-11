@@ -22,6 +22,8 @@ const PAGE_SIZE = 12;
 export function HomeClient() {
   // ----------------------------------------------------------------- state
   const [importOpen, setImportOpen] = useState(false);
+  const [isUpdating, setIsUpdating] = useState(false);
+
   const [searchText, setSearchText] = useState("");
   const [uploadedImage, setUploadedImage] = useState("");
   const imageFileRef = useRef<File | null>(null);
@@ -57,7 +59,6 @@ export function HomeClient() {
       setIsLoading(true);
       try {
         const data = await getProducts(p, PAGE_SIZE, f);
-        // O backend já devolve imagem_url apontando para thumbnail
         setProducts(data.items);
         setTotal(data.total);
         setTotalPages(data.total_pages);
@@ -75,13 +76,12 @@ export function HomeClient() {
       try {
         const data = await searchProducts(q || undefined, imageFileRef.current, 12, f);
 
-        // enrich search results (search endpoint returns only id)
         const enriched = await Promise.all(
           data.items.map(async (item) => {
             const detail = await getProductDetail(item.id_produto);
             return {
               id_produto:          item.id_produto,
-              imagem_url:          thumbnailUrl(item.id_produto), // thumbnail no grid
+              imagem_url:          thumbnailUrl(item.id_produto),
               nome_produto:        detail?.nome_produto        ?? "",
               marca:               detail?.marca               ?? "",
               categoria_principal: detail?.categoria_principal ?? "",
@@ -122,7 +122,7 @@ export function HomeClient() {
               const detail = await getProductDetail(item.id_produto);
               return {
                 id_produto:          item.id_produto,
-                imagem_url:          thumbnailUrl(item.id_produto), // thumbnail no strip
+                imagem_url:          thumbnailUrl(item.id_produto),
                 nome_produto:        detail?.nome_produto        ?? "",
                 marca:               detail?.marca               ?? "",
                 categoria_principal: detail?.categoria_principal ?? "",
@@ -154,14 +154,9 @@ export function HomeClient() {
   }, []);
 
   // ---------------------------------------------------- select a product
-  /**
-   * Quando o usuário clica num card do grid:
-   *  - grid usa thumbnail (já está no card)
-   *  - preview recebe a URL de output (alta qualidade)
-   */
   const openProduct = useCallback(
     (productId: string | number) => {
-      const outputUrl = imageUrl(productId); // alta qualidade para o preview
+      const outputUrl = imageUrl(productId);
       setSelectedImage(outputUrl);
       setSelectedProduct(null);
       setSimilarProducts([]);
@@ -191,11 +186,10 @@ export function HomeClient() {
     }
 
     if (img) {
-      // tenta extrair o id da URL guardada
       const match = img.match(/\/(\d+)\.jpg$/);
       if (match) {
         const pid = match[1];
-        setSelectedImage(imageUrl(pid)); // garante URL de output
+        setSelectedImage(imageUrl(pid));
         loadDetail(pid);
         loadSimilar(pid, imageUrl(pid));
       } else {
@@ -325,7 +319,11 @@ export function HomeClient() {
 
   return (
     <div className="min-h-screen bg-firmato-bg">
-      <Topbar onImport={() => setImportOpen(true)} onReset={handleClearAll} />
+      <Topbar
+        onImport={() => setImportOpen(true)}
+        onReset={handleClearAll}
+        isUpdating={isUpdating}
+      />
 
       <div className="flex items-stretch">
         {/* Left panel */}
@@ -385,7 +383,11 @@ export function HomeClient() {
         </div>
       </div>
 
-      <ImportModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <ImportModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onUpdatingChange={setIsUpdating}
+      />
     </div>
   );
 }

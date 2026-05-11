@@ -3,10 +3,12 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
+import { cn } from "@/lib/utils";
 
 interface TopbarProps {
   onImport: () => void;
   onReset: () => void;
+  isUpdating?: boolean;
 }
 
 function LogoSvg() {
@@ -118,17 +120,40 @@ function SobreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   );
 }
 
-export function Topbar({ onImport, onReset }: TopbarProps) {
+export function Topbar({ onImport, onReset, isUpdating = false }: TopbarProps) {
   const [sobreOpen, setSobreOpen] = useState(false);
 
   return (
     <>
       <header className="sticky top-0 z-40 w-full bg-firmato-surface border-b border-firmato-border">
+        {/* Loading bar — thin accent line that pulses while updating */}
+        {isUpdating && (
+          <div className="absolute top-0 left-0 right-0 h-0.5 overflow-hidden">
+            <div className="h-full bg-firmato-accent animate-loading-bar" />
+          </div>
+        )}
+
         <div className="flex items-center justify-between px-10 py-5">
           <Logo onClick={onReset} />
+
           <div className="flex items-center gap-3">
-            <Button variant="solid" onClick={onImport}>
-              <RefreshCw size={14} />
+            {/* Updating status badge */}
+            {isUpdating && (
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-firmato-accent/10 border border-firmato-accent/30 rounded-sm">
+                <div className="w-3 h-3 rounded-full border-2 border-t-firmato-accent border-firmato-accent/30 animate-spin" />
+                <span className="font-lato text-[11px] uppercase tracking-wider text-firmato-accent">
+                  Atualizando...
+                </span>
+              </div>
+            )}
+
+            <Button
+              variant="solid"
+              onClick={onImport}
+              disabled={isUpdating}
+              className={cn(isUpdating && "opacity-50 cursor-not-allowed")}
+            >
+              <RefreshCw size={14} className={cn(isUpdating && "animate-spin")} />
               Atualizar Dados
             </Button>
             <Button variant="outline" onClick={() => setSobreOpen(true)}>

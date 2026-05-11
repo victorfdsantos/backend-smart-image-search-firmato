@@ -79,7 +79,7 @@ async def search(
         blob_repo       = request.app.state.blob_repo,   # ← passa o repo
     )
 
-    results = await service.search(          # ← await (search agora é async)
+    results = await service.search(        
         query       = q,
         image_bytes = image_bytes,
         top_k       = top_k,

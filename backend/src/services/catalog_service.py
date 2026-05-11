@@ -140,6 +140,7 @@ class CatalogService:
         hash_index:         dict,
     ) -> None:
         try:
+            # ── 1. Promove arquivos do staging para produção em paralelo ──────────
             move_tasks = []
             for pid in updated_ids:
                 fname = f"{pid}.jpg"
@@ -147,15 +148,21 @@ class CatalogService:
 
             await asyncio.gather(*move_tasks)
 
-            # atualiza SharePoint (síncrono) em thread pool
-            for item in sharepoint_updates:
-                await asyncio.to_thread(self.sp.update_row, item["pid"], item["fields"])
-
-            # persiste hash index
+            # ── 2. Persiste hash index ────────────────────────────────────────────
             await self._save_hash_index(hash_index)
 
-            # limpa staging
+            # ── 3. Limpa staging ─────────────────────────────────────────────────
             await self._clear_staging(updated_ids)
+
+            # ── 4. Atualiza SharePoint de forma ASSÍNCRONA (fire-and-forget) ─────
+            #    Não bloqueia o commit — falhas são logadas mas não propagadas.
+            asyncio.create_task(
+                self._update_sharepoint_async(sharepoint_updates)
+            )
+            self.logger.info(
+                f"[Catalog] SharePoint update agendado de forma assíncrona "
+                f"para {len(sharepoint_updates)} produto(s)."
+            )
 
             # NOTA: filter_index NÃO é reconstruído aqui.
             # É reconstruído pelo AI durante o treino (FilterIndexService.rebuild)
@@ -164,6 +171,37 @@ class CatalogService:
         except Exception as exc:
             self.logger.error(f"[Catalog] Commit falhou: {exc}", exc_info=True)
             raise
+
+    # ================================================================ SHAREPOINT ASYNC
+
+    async def _update_sharepoint_async(self, sharepoint_updates: list[dict]) -> None:
+        """
+        Atualiza cada linha do SharePoint de forma assíncrona via asyncio.to_thread.
+        As chamadas são feitas em paralelo (gather) com tratamento individual de erros.
+        """
+        if not sharepoint_updates:
+            return
+
+        self.logger.info(
+            f"[Catalog][SP] Iniciando atualização assíncrona de "
+            f"{len(sharepoint_updates)} linha(s) no SharePoint..."
+        )
+
+        async def update_one(item: dict) -> None:
+            pid    = item["pid"]
+            fields = item["fields"]
+            try:
+                await asyncio.to_thread(self.sp.update_row, pid, fields)
+                self.logger.info(f"[Catalog][SP] OK | pid={pid} | fields={list(fields.keys())}")
+            except Exception as exc:
+                self.logger.error(
+                    f"[Catalog][SP] Falha ao atualizar pid={pid}: {exc}",
+                    exc_info=True,
+                )
+
+        await asyncio.gather(*[update_one(item) for item in sharepoint_updates])
+
+        self.logger.info("[Catalog][SP] Atualização assíncrona do SharePoint concluída.")
 
     # ================================================================ HELPERS
 
