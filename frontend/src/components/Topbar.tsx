@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { Upload, X } from "lucide-react";
+import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Modal } from "@/components/ui/Modal";
 
@@ -62,7 +62,6 @@ function SobreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
     <Modal open={open} onClose={onClose} title="Sobre a Plataforma">
       <div className="space-y-5">
-        {/* Descrição */}
         <div className="space-y-3">
           <p className="font-lato text-sm text-firmato-text leading-relaxed">
             O <strong>Firmato Buscador de Imagens</strong> é uma plataforma interna de busca semântica
@@ -76,7 +75,6 @@ function SobreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
 
         <div className="border-t border-firmato-border" />
 
-        {/* Como funciona */}
         <div className="space-y-2">
           <p className="font-lato text-xs font-bold text-firmato-accent uppercase tracking-widest">
             Como funciona
@@ -87,7 +85,7 @@ function SobreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
               { titulo: "Busca por imagem", desc: "Faça upload de uma foto de referência e o sistema retorna os produtos visualmente mais parecidos do catálogo." },
               { titulo: "Busca combinada", desc: "Use texto e imagem juntos para resultados ainda mais precisos." },
               { titulo: "Filtros", desc: "Refine os resultados por marca, categoria, faixa de preço, ambiente, forma e material." },
-              { titulo: "Importação", desc: "Administradores podem importar planilhas .xlsx para atualizar o catálogo e as imagens." },
+              { titulo: "Atualizar Dados", desc: "Sincroniza o catálogo com o SharePoint, processa imagens e retreina os embeddings de busca automaticamente." },
             ].map(({ titulo, desc }) => (
               <li key={titulo} className="flex gap-2">
                 <span className="text-firmato-accent mt-0.5 shrink-0">→</span>
@@ -101,7 +99,6 @@ function SobreModal({ open, onClose }: { open: boolean; onClose: () => void }) {
 
         <div className="border-t border-firmato-border" />
 
-        {/* Rodapé */}
         <div className="flex items-center justify-between">
           <div>
             <p className="font-lato text-xs text-firmato-muted">
@@ -131,8 +128,8 @@ export function Topbar({ onImport, onReset }: TopbarProps) {
           <Logo onClick={onReset} />
           <div className="flex items-center gap-3">
             <Button variant="solid" onClick={onImport}>
-              <Upload size={14} />
-              Importar Dados
+              <RefreshCw size={14} />
+              Atualizar Dados
             </Button>
             <Button variant="outline" onClick={() => setSobreOpen(true)}>
               Sobre

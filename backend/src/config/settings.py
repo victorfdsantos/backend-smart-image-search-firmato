@@ -18,7 +18,6 @@ _cfg = _load()
 
 
 def _resolve(path: str) -> Path:
-    """Resolve caminho relativo a partir do diretório raiz do projeto."""
     p = Path(path)
     if not p.is_absolute():
         p = _BASE_DIR / p
@@ -38,7 +37,6 @@ class SharePointSettings:
 class GeneralSettings:
     landing_path:    Path = _resolve(_cfg.get("general", "landing_path"))
     data_path:       Path = _resolve(_cfg.get("general", "data_path"))
-    logs_path:       Path = _resolve(_cfg.get("general", "logs_path"))
     tmp_images_path: Path = _resolve(_cfg.get("general", "tmp_images_path"))
 
 

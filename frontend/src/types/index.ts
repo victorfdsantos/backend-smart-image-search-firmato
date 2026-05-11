@@ -80,15 +80,14 @@ export interface FilterOptions {
 
 export type FilterMap = Record<string, string[]>;
 
+/**
+ * Resposta do endpoint POST /catalog/register
+ */
 export interface UploadStats {
-  total: number;
-  novos: number;
-  imagem_principal_atualizada: number;
-  secundarias_processadas: number;
-  secundarias_deletadas: number;
-  pasta_nas_movida: number;
-  dados_atualizados: number;
-  ignorados: number;
-  erros: number;
-  arquivos_limpos: number;
+  status: string;
+  elapsed_seconds: number;
+  processed: number;
+  skipped: number;
+  errors: number;
+  updated_ids: string[];
 }

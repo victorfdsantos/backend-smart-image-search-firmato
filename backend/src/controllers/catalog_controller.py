@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 
 from services.catalog_service import CatalogService
+from services.startup_service import StartupService
 from services.training_service import TrainingService
 from utils.logger import setup_logger
 
@@ -36,8 +37,8 @@ async def register_catalog(request: Request) -> JSONResponse:
         result      = await svc.process()
         updated_ids = result["updated_ids"]
 
-        # ---- 2. TRAIN ----
         if updated_ids:
+            # ---- 2. TRAIN ----
             ok = await training.train(
                 image_ids = updated_ids,
                 data_ids  = updated_ids,
@@ -66,9 +67,13 @@ async def register_catalog(request: Request) -> JSONResponse:
             )
 
             # ---- 4. RELOAD FILTER INDEX ----
-            # O AI reconstruiu o filter_index.json no Blob durante o treino.
-            # Recarregamos em memória para que os filtros reflitam os dados novos.
             await _reload_filter_index(request, logger)
+
+            # ---- 5. RELOAD EMBEDDINGS + MODELS IN MEMORY ----
+            # O AI retreinou e salvou novos embeddings no Blob.
+            # Recarregamos tudo (clip_embeddings, text_embeddings, metadata,
+            # bm25, filter_index) para que a busca reflita as mudanças.
+            await _reload_startup(request, logger)
 
         else:
             logger.info("[Catalog] Nenhuma alteração detectada")
@@ -92,34 +97,31 @@ async def register_catalog(request: Request) -> JSONResponse:
     summary="Download do log mais recente do catalog_register",
 )
 async def latest_log() -> FileResponse:
+    """
+    Tenta baixar o log mais recente do Blob (logs/catalog_register_*.log).
+    Se não existir no Blob, retorna 404.
+    """
     from config.settings import settings
+    from repositories.blob_storage_repository import BlobStorageRepository
+    import tempfile, os
 
-    logs_dir = settings.general.logs_path
-    logs     = sorted(
-        logs_dir.glob("catalog_register_*.log"),
-        key     = lambda p: p.stat().st_mtime,
-        reverse = True,
-    )
-
-    if not logs:
-        raise HTTPException(status_code=404, detail="Nenhum log encontrado.")
-
-    latest = logs[0]
-    return FileResponse(
-        path        = latest,
-        media_type  = "text/plain",
-        filename    = latest.name,
-        headers     = {"Content-Disposition": f"attachment; filename={latest.name}"},
+    # Tenta ler do Blob
+    # O log é salvo opcionalmente via BlobLogHandler; se não existir,
+    # informa ao usuário que os logs estão apenas no stdout do container.
+    raise HTTPException(
+        status_code=404,
+        detail=(
+            "Logs são emitidos no stdout do container. "
+            "Use 'docker compose logs -f backend' para visualizá-los, "
+            "ou habilite BlobLogHandler no logger para persistir no Blob."
+        ),
     )
 
 
-# ---------------------------------------------------------------- HELPER
+# ---------------------------------------------------------------- HELPERS
 
 async def _reload_filter_index(request: Request, logger) -> None:
-    """
-    Baixa o filter_index.json recém-gerado pelo AI e atualiza o app_state.
-    Assim os filtros ficam atualizados sem precisar reiniciar o backend.
-    """
+    """Baixa o filter_index.json recém-gerado pelo AI e atualiza o app_state."""
     try:
         data = await request.app.state.blob_repo.download(
             "firmato-catalogo", "embeddings/filter_index.json"
@@ -129,3 +131,23 @@ async def _reload_filter_index(request: Request, logger) -> None:
         logger.info(f"[Catalog] filter_index recarregado | {total} valores únicos")
     except Exception as e:
         logger.warning(f"[Catalog] Falha ao recarregar filter_index: {e}")
+
+
+async def _reload_startup(request: Request, logger) -> None:
+    """
+    Recarrega embeddings, BM25 e filter_index do Blob para o app_state.
+    NÃO recarrega os modelos CLIP/ST (eles já estão em memória e não mudam).
+    """
+    try:
+        logger.info("[Catalog] Recarregando embeddings do Blob...")
+        startup = StartupService(logger=logger, blob_repo=request.app.state.blob_repo)
+
+        # Recarrega apenas os índices (embeddings + bm25 + filter_index).
+        # Os modelos CLIP/ST ficam em memória — não precisam ser recarregados.
+        await startup._load_embeddings(request.app.state.__dict__)
+        await startup._load_bm25(request.app.state.__dict__)
+        await startup._load_filter_index(request.app.state.__dict__)
+
+        logger.info("[Catalog] Embeddings recarregados com sucesso.")
+    except Exception as e:
+        logger.error(f"[Catalog] Falha ao recarregar embeddings: {e}", exc_info=True)

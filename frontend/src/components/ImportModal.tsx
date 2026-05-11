@@ -1,9 +1,8 @@
 "use client";
 import { useState } from "react";
-import { Upload, CheckCircle, Brain, FileText } from "lucide-react";
+import { CheckCircle, FileText, AlertTriangle, RefreshCw } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
-import { Spinner } from "@/components/ui/Spinner";
 import type { UploadStats } from "@/types";
 
 interface ImportModalProps {
@@ -13,16 +12,19 @@ interface ImportModalProps {
 
 type State =
   | { kind: "idle" }
-  | { kind: "uploading" }
-  | { kind: "retraining" }
-  | { kind: "success"; stats?: UploadStats }
+  | { kind: "loading" }
+  | { kind: "success"; stats: UploadStats; elapsed: number }
   | { kind: "error"; message: string };
 
 function StatRow({ label, value }: { label: string; value: number }) {
   return (
-    <div className="flex items-center justify-between py-1 border-b border-firmato-border last:border-b-0">
+    <div className="flex items-center justify-between py-1.5 border-b border-firmato-border last:border-b-0">
       <span className="font-lato text-sm text-firmato-muted">{label}</span>
-      <span className="font-lato text-sm font-semibold text-firmato-text">
+      <span
+        className={`font-lato text-sm font-semibold ${
+          value > 0 ? "text-firmato-accent" : "text-firmato-text"
+        }`}
+      >
         {value}
       </span>
     </div>
@@ -37,117 +39,145 @@ export function ImportModal({ open, onClose }: ImportModalProps) {
     onClose();
   };
 
-  const doProcess = async () => {
-    setState({ kind: "uploading" });
-
+  const doUpdate = async () => {
+    setState({ kind: "loading" });
     try {
-      const result = await fetch("/api/catalog/register", {
-        method: "POST",
-      }).then(res => res.json());
+      const res = await fetch("/api/catalog/register", { method: "POST" });
+      const result = await res.json();
 
-      if (!result || result.detail) {
-        setState({ kind: "error", message: result?.detail ?? "Erro inesperado." });
+      if (!res.ok || result.detail) {
+        setState({
+          kind: "error",
+          message: result?.detail ?? `Erro HTTP ${res.status}`,
+        });
         return;
       }
 
-      setState({ kind: "success", stats: result });
+      setState({
+        kind: "success",
+        stats: result,
+        elapsed: result.elapsed_seconds ?? 0,
+      });
     } catch (e) {
-      setState({ kind: "error", message: `Erro: ${e}` });
+      setState({ kind: "error", message: `Erro inesperado: ${e}` });
     }
   };
 
-  const doRetrain = async () => {
-    setState({ kind: "retraining" });
-    try {
-      const res = await fetch("/api/catalog/retrain", { method: "POST" });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      setState({ kind: "success" });
-    } catch (e) {
-      setState({ kind: "error", message: `Erro no retreinamento: ${e}` });
-    }
+  const downloadLog = () => {
+    window.open("/api/catalog/latest-log", "_blank");
   };
-
-  const isLoading = state.kind === "uploading" || state.kind === "retraining";
 
   return (
-    <Modal open={open} onClose={handleClose} title="Sincronizar Catálogo">
-      {isLoading ? (
-        <div className="flex flex-col items-center gap-3 py-10">
-          <Spinner className="w-8 h-8" />
-          <p className="font-lato text-sm font-medium text-firmato-text">
-            {state.kind === "retraining"
-              ? "Recarregando sistema..."
-              : "Sincronizando catálogo..."}
+    <Modal open={open} onClose={handleClose} title="Atualizar Catálogo">
+      {state.kind === "idle" && (
+        <div className="space-y-5">
+          <p className="font-lato text-sm text-firmato-muted leading-relaxed">
+            Sincroniza automaticamente o catálogo com o SharePoint, processa
+            imagens novas ou alteradas e retreina os embeddings de busca.
           </p>
-          <p className="font-lato text-xs text-firmato-muted text-center">
-            Isso pode levar alguns minutos.
-          </p>
+          <Button variant="solid" className="w-full" onClick={doUpdate}>
+            <RefreshCw size={14} />
+            Atualizar Dados
+          </Button>
         </div>
-      ) : state.kind === "success" ? (
-        <div className="space-y-4">
-          <div className="flex items-center gap-2">
-            <CheckCircle size={22} className="text-green-500" />
-            <p className="font-lato text-[15px] font-semibold text-firmato-text">
-              {state.stats ? "Processamento concluído" : "Recarregamento concluído"}
+      )}
+
+      {state.kind === "loading" && (
+        <div className="flex flex-col items-center gap-4 py-10">
+          {/* Spinner animado */}
+          <div className="relative w-12 h-12">
+            <div className="absolute inset-0 rounded-full border-2 border-firmato-border" />
+            <div className="absolute inset-0 rounded-full border-2 border-t-firmato-accent animate-spin" />
+          </div>
+          <div className="text-center space-y-1">
+            <p className="font-lato text-sm font-semibold text-firmato-text">
+              Atualizando...
             </p>
+            <p className="font-lato text-xs text-firmato-muted">
+              Sincronizando com SharePoint, processando imagens e retreinando
+              embeddings. Isso pode levar alguns minutos.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {state.kind === "success" && (
+        <div className="space-y-4">
+          {/* Header de sucesso */}
+          <div className="flex items-center gap-2">
+            <CheckCircle size={20} className="text-green-500 shrink-0" />
+            <div>
+              <p className="font-lato text-[15px] font-semibold text-firmato-text">
+                Atualização concluída
+              </p>
+              <p className="font-lato text-xs text-firmato-muted">
+                {state.elapsed.toFixed(1)}s · embeddings recarregados
+              </p>
+            </div>
           </div>
 
           <div className="border-t border-firmato-border" />
 
-          {state.stats ? (
-            <div>
-              <StatRow label="Total de linhas" value={state.stats.total} />
-              <StatRow label="Novos produtos" value={state.stats.novos} />
-              <StatRow label="Imagens atualizadas" value={state.stats.imagem_principal_atualizada} />
-              <StatRow label="Secundárias processadas" value={state.stats.secundarias_processadas} />
-              <StatRow label="Secundárias deletadas" value={state.stats.secundarias_deletadas} />
-              <StatRow label="Pastas movidas no NAS" value={state.stats.pasta_nas_movida} />
-              <StatRow label="Dados atualizados" value={state.stats.dados_atualizados} />
-              <StatRow label="Ignorados" value={state.stats.ignorados} />
-              <StatRow label="Erros" value={state.stats.erros} />
-              <StatRow label="Arquivos limpos" value={state.stats.arquivos_limpos} />
-            </div>
-          ) : (
-            <p className="font-lato text-sm text-firmato-muted">
-              Sistema recarregado com sucesso.
+          {/* Stats */}
+          <div className="bg-firmato-bg p-4 space-y-0">
+            <p className="font-lato text-[10px] font-bold text-firmato-accent uppercase tracking-widest mb-2">
+              Resumo
             </p>
-          )}
-
-          <div className="flex gap-3 pt-2">
-            {state.stats && (
-              <Button
-                variant="outline"
-                className="flex-1"
-                onClick={() => window.open("/api/catalog/latest-log", "_blank")}
-              >
-                <FileText size={14} />
-                Baixar Log
-              </Button>
+            <StatRow label="Produtos processados" value={state.stats.processed ?? 0} />
+            <StatRow label="Ignorados (sem alteração)" value={state.stats.skipped ?? 0} />
+            <StatRow label="Erros" value={state.stats.errors ?? 0} />
+            {state.stats.updated_ids && (
+              <div className="flex items-center justify-between py-1.5">
+                <span className="font-lato text-sm text-firmato-muted">
+                  IDs atualizados
+                </span>
+                <span className="font-lato text-sm font-semibold text-firmato-text">
+                  {Array.isArray(state.stats.updated_ids)
+                    ? state.stats.updated_ids.length
+                    : 0}
+                </span>
+              </div>
             )}
+          </div>
+
+          {/* Botões */}
+          <div className="flex gap-3 pt-1">
+            <Button variant="outline" className="flex-1" onClick={downloadLog}>
+              <FileText size={14} />
+              Baixar Log
+            </Button>
             <Button variant="solid" className="flex-1" onClick={handleClose}>
               Fechar
             </Button>
           </div>
         </div>
-      ) : (
+      )}
+
+      {state.kind === "error" && (
         <div className="space-y-4">
-          <p className="font-lato text-sm text-firmato-muted">
-            Este processo sincroniza automaticamente o catálogo com o SharePoint.
-          </p>
+          <div className="flex items-start gap-2">
+            <AlertTriangle size={20} className="text-red-500 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-lato text-[15px] font-semibold text-firmato-text">
+                Falha na atualização
+              </p>
+              <p className="font-lato text-xs text-firmato-muted mt-1 leading-relaxed">
+                {state.message}
+              </p>
+            </div>
+          </div>
 
-          {state.kind === "error" && (
-            <p className="font-lato text-xs text-red-600">{state.message}</p>
-          )}
-
-          <div className="flex gap-3">
-            <Button variant="solid" className="flex-1" onClick={doProcess}>
-              <Upload size={14} />
-              Processar Catálogo
+          <div className="flex gap-3 pt-1">
+            <Button
+              variant="outline"
+              className="flex-1"
+              onClick={() => setState({ kind: "idle" })}
+            >
+              Tentar novamente
             </Button>
-
-            <Button variant="outline" className="flex-1" onClick={doRetrain}>
-              <Brain size={14} />
-              Recarregar Sistema
+            <Button variant="solid" className="flex-1" onClick={downloadLog}>
+              <FileText size={14} />
+              Ver Log
             </Button>
           </div>
         </div>

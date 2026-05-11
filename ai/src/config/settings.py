@@ -25,14 +25,11 @@ def _resolve(path: str) -> Path:
 
 
 class NasSettings:
-    # Pasta raiz do NAS — imagens ficam em output/ de forma recursiva
     base_path: Path = _resolve(_cfg.get("nas", "base_path"))
-    # Pasta data/ com os JSONs de metadados
     data_path: Path = _resolve(_cfg.get("nas", "data_path"))
 
 
 class EmbeddingsSettings:
-    # Pasta onde ficam os arquivos .npy, .pkl e metadata_index.json
     output_path: Path = _resolve(_cfg.get("embeddings", "output_path"))
 
     @property
@@ -59,19 +56,16 @@ class ModelSettings:
                                    fallback="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     device: str = _cfg.get("models", "device", fallback="cpu")
 
+
 class AzureSettings:
     connection_string: str = os.getenv("AZURE_STORAGE_CONNECTION_STRING", "")
 
-class LogsSettings:
-    path: Path = _resolve(_cfg.get("logs", "path", fallback="./logs"))
-
 
 class Settings:
-    nas = NasSettings()
+    nas        = NasSettings()
     embeddings = EmbeddingsSettings()
-    models = ModelSettings()
-    logs = LogsSettings()
-    azure = AzureSettings()
+    models     = ModelSettings()
+    azure      = AzureSettings()
 
 
 settings = Settings()
