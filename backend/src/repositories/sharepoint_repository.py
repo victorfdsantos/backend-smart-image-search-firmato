@@ -3,6 +3,8 @@ SharePointRepository — leitura e escrita na planilha Excel via Microsoft Graph
 
 Todos os métodos são SÍNCRONOS (requests). O catalog_service deve chamá-los
 via asyncio.to_thread para não bloquear o event loop.
+
+Inclui retry com exponential backoff para erros de cota (429 / 503).
 """
 
 import logging
@@ -12,6 +14,38 @@ from typing import Optional
 import requests
 
 from config.settings import settings
+
+# ── Retry config ──────────────────────────────────────────────────────────────
+_RETRY_STATUS = {429, 503}   # códigos que disparam retry
+_MAX_RETRIES  = 6             # máximo de tentativas por chamada
+_BACKOFF_BASE = 2.0           # segundos base (dobra a cada tentativa)
+_BACKOFF_MAX  = 120.0         # teto de espera por tentativa (segundos)
+
+
+def _with_retry(fn, logger: logging.Logger, label: str):
+    """Executa fn() com retry + exponential backoff em erros de cota."""
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return fn()
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else 0
+
+            if status not in _RETRY_STATUS or attempt == _MAX_RETRIES:
+                raise
+
+            # Respeita o header Retry-After se presente
+            retry_after = exc.response.headers.get("Retry-After")
+            wait = float(retry_after) if retry_after else min(
+                _BACKOFF_BASE * (2 ** (attempt - 1)), _BACKOFF_MAX
+            )
+
+            logger.warning(
+                f"[SP] {label} | HTTP {status} (throttle/cota) | "
+                f"tentativa {attempt}/{_MAX_RETRIES} | aguardando {wait:.1f}s..."
+            )
+            time.sleep(wait)
+
+    raise RuntimeError(f"[SP] {label}: todas as {_MAX_RETRIES} tentativas falharam.")
 
 
 class SharePointRepository:
@@ -31,19 +65,22 @@ class SharePointRepository:
             return self._token
 
         self.logger.debug("[SP] Obtendo token de autenticação...")
-        url  = self._TOKEN_URL.format(tenant=self._sp.tenant_id)
-        resp = requests.post(
-            url,
-            data={
-                "grant_type":    "client_credentials",
-                "client_id":     self._sp.client_id,
-                "client_secret": self._sp.client_secret,
-                "scope":         "https://graph.microsoft.com/.default",
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        self._token = resp.json()["access_token"]
+
+        def do():
+            resp = requests.post(
+                self._TOKEN_URL.format(tenant=self._sp.tenant_id),
+                data={
+                    "grant_type":    "client_credentials",
+                    "client_id":     self._sp.client_id,
+                    "client_secret": self._sp.client_secret,
+                    "scope":         "https://graph.microsoft.com/.default",
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            return resp.json()["access_token"]
+
+        self._token = _with_retry(do, self.logger, "get_token")
         self.logger.info("[SP] Token obtido com sucesso.")
         return self._token
 
@@ -52,9 +89,27 @@ class SharePointRepository:
 
     def _get(self, url: str) -> dict:
         self.logger.debug(f"[SP] GET {url}")
-        r = requests.get(url, headers=self._headers(), timeout=30)
-        r.raise_for_status()
-        return r.json()
+
+        def do():
+            r = requests.get(url, headers=self._headers(), timeout=30)
+            r.raise_for_status()
+            return r.json()
+
+        return _with_retry(do, self.logger, f"GET ...{url[-60:]}")
+
+    def _patch(self, url: str, payload: dict) -> None:
+        self.logger.debug(f"[SP] PATCH {url}")
+
+        def do():
+            r = requests.patch(
+                url,
+                headers={**self._headers(), "Content-Type": "application/json"},
+                json=payload,
+                timeout=30,
+            )
+            r.raise_for_status()
+
+        _with_retry(do, self.logger, f"PATCH ...{url[-60:]}")
 
     # ------------------------------------------------------------ METADATA
 
@@ -68,21 +123,20 @@ class SharePointRepository:
         drive    = self._get(f"{self._GRAPH_BASE}/sites/{site_id}/drives")
         drive_id = drive["value"][0]["id"]
 
-        item     = self._get(
+        item = self._get(
             f"{self._GRAPH_BASE}/sites/{site_id}/drives/{drive_id}"
             f"/root:/{self._sp.file_name}"
         )
-        item_id  = item["id"]
+        item_id = item["id"]
 
-        tables   = self._get(
+        tables = self._get(
             f"{self._GRAPH_BASE}/sites/{site_id}/drives/{drive_id}"
             f"/items/{item_id}/workbook/tables"
         )
-        table    = tables["value"][0]["name"]
+        table = tables["value"][0]["name"]
 
         self.logger.debug(
-            f"[SP] IDs resolvidos | site={site_id[:12]}... "
-            f"drive={drive_id[:12]}... table={table}"
+            f"[SP] IDs resolvidos | site={site_id[:12]}... drive={drive_id[:12]}... table={table}"
         )
         return site_id, drive_id, item_id, table
 
@@ -109,12 +163,14 @@ class SharePointRepository:
 
         page = 0
         while url:
-            data = self._get(url)
+            data  = self._get(url)
             batch = data.get("value", [])
             rows.extend(r["values"][0] for r in batch)
             url = data.get("@odata.nextLink")
             page += 1
-            self.logger.debug(f"[SP] list_rows: página {page} | {len(batch)} linhas | total acum. {len(rows)}")
+            self.logger.debug(
+                f"[SP] list_rows: página {page} | {len(batch)} linhas | total {len(rows)}"
+            )
 
         elapsed = round(time.time() - t0, 2)
         result  = [dict(zip(headers, r)) for r in rows]
@@ -149,7 +205,9 @@ class SharePointRepository:
                 break
 
         if target_idx is None:
-            self.logger.warning(f"[SP] update_row | pid={product_id} não encontrado na planilha — ignorando.")
+            self.logger.warning(
+                f"[SP] update_row | pid={product_id} não encontrado na planilha — ignorando."
+            )
             return
 
         row_values = list(rows_data[target_idx]["values"][0])
@@ -158,9 +216,13 @@ class SharePointRepository:
                 col_idx = headers.index(k)
                 old_val = row_values[col_idx]
                 row_values[col_idx] = v
-                self.logger.debug(f"[SP] update_row | pid={product_id} | {k}: {old_val!r} → {v!r}")
+                self.logger.debug(
+                    f"[SP] update_row | pid={product_id} | {k}: {old_val!r} → {v!r}"
+                )
             else:
-                self.logger.warning(f"[SP] update_row | coluna '{k}' não encontrada nos headers — ignorando.")
+                self.logger.warning(
+                    f"[SP] update_row | coluna '{k}' não encontrada — ignorando."
+                )
 
         patch_url = (
             f"{self._GRAPH_BASE}/sites/{site_id}/drives/{drive_id}"
@@ -168,13 +230,7 @@ class SharePointRepository:
             f"/rows/itemAt(index={target_idx})"
         )
 
-        resp = requests.patch(
-            patch_url,
-            headers={**self._headers(), "Content-Type": "application/json"},
-            json={"values": [row_values]},
-            timeout=30,
-        )
-        resp.raise_for_status()
+        self._patch(patch_url, {"values": [row_values]})
 
         elapsed = round(time.time() - t0, 2)
         self.logger.info(f"[SP] update_row concluído | pid={product_id} | {elapsed}s")

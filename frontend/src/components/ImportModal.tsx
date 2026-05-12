@@ -1,6 +1,6 @@
 "use client";
 import { useState } from "react";
-import { CheckCircle, FileText, AlertTriangle, RefreshCw, X } from "lucide-react";
+import { CheckCircle, FileText, AlertTriangle, RefreshCw } from "lucide-react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import type { UploadStats } from "@/types";
@@ -43,54 +43,56 @@ export function ImportModal({ open, onClose, onUpdatingChange }: ImportModalProp
     window.open("/api/catalog/latest-log", "_blank");
   };
 
-  // Confirmation step: user clicks "Confirmar" → closes modal, loading starts in background
   const handleConfirm = () => {
-    onClose(); // close the confirm modal immediately — user can navigate freely
+    onClose();
     startUpdate();
   };
 
   const startUpdate = async () => {
     onUpdatingChange?.(true);
-
     try {
-      const res = await fetch("/api/catalog/register", {
-        method: "POST",
-      });
+      const res = await fetch("/api/catalog/register", { method: "POST" });
 
+      // Lê o body como texto primeiro para evitar crash em respostas não-JSON
       const text = await res.text();
 
-      let data: any = null;
-
+      let data: Record<string, unknown> = {};
       try {
-        data = text ? JSON.parse(text) : null;
+        data = JSON.parse(text);
       } catch {
-        throw new Error(text || `Erro HTTP ${res.status}`);
-      }
-
-      if (!res.ok || data?.detail) {
+        // Servidor retornou HTML/texto de erro (ex: 502, 504, 500 sem JSON)
         setResult({
           kind: "error",
-          message: data?.detail ?? `Erro HTTP ${res.status}`,
+          message: `Erro HTTP ${res.status}: ${text.slice(0, 300)}`,
         });
+        return;
+      }
+
+      if (!res.ok || data.detail) {
+        const detail = data.detail;
+        const msg =
+          typeof detail === "string"
+            ? detail
+            : typeof detail === "object" && detail !== null
+            ? JSON.stringify(detail)
+            : `Erro HTTP ${res.status}`;
+        setResult({ kind: "error", message: msg });
         return;
       }
 
       setResult({
         kind: "success",
-        stats: data,
-        elapsed: data.elapsed_seconds ?? 0,
+        stats: data as unknown as UploadStats,
+        elapsed: (data.elapsed_seconds as number) ?? 0,
       });
-    } catch (e) {
-      setResult({
-        kind: "error",
-        message: e instanceof Error ? e.message : String(e),
-      });
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setResult({ kind: "error", message: `Erro de rede: ${msg}` });
     } finally {
       onUpdatingChange?.(false);
     }
   };
 
-  // If result modal should auto-open when done
   const resultOpen = result.kind === "success" || result.kind === "error";
 
   return (
@@ -118,10 +120,12 @@ export function ImportModal({ open, onClose, onUpdatingChange }: ImportModalProp
         </div>
       </Modal>
 
-      {/* ── Result modal (success / error) — opens automatically when done ── */}
-      <Modal open={resultOpen} onClose={handleClose} title={
-        result.kind === "success" ? "Atualização Concluída" : "Falha na Atualização"
-      }>
+      {/* ── Result modal (auto-opens when done) ── */}
+      <Modal
+        open={resultOpen}
+        onClose={handleClose}
+        title={result.kind === "success" ? "Atualização Concluída" : "Falha na Atualização"}
+      >
         {result.kind === "success" && (
           <div className="space-y-4">
             <div className="flex items-center gap-2">
@@ -149,7 +153,9 @@ export function ImportModal({ open, onClose, onUpdatingChange }: ImportModalProp
                 <div className="flex items-center justify-between py-1.5">
                   <span className="font-lato text-sm text-firmato-muted">IDs atualizados</span>
                   <span className="font-lato text-sm font-semibold text-firmato-text">
-                    {Array.isArray(result.stats.updated_ids) ? result.stats.updated_ids.length : 0}
+                    {Array.isArray(result.stats.updated_ids)
+                      ? result.stats.updated_ids.length
+                      : 0}
                   </span>
                 </div>
               )}
@@ -175,7 +181,7 @@ export function ImportModal({ open, onClose, onUpdatingChange }: ImportModalProp
                 <p className="font-lato text-[15px] font-semibold text-firmato-text">
                   Falha na atualização
                 </p>
-                <p className="font-lato text-xs text-firmato-muted mt-1 leading-relaxed">
+                <p className="font-lato text-xs text-firmato-muted mt-1 leading-relaxed break-all">
                   {result.message}
                 </p>
               </div>
