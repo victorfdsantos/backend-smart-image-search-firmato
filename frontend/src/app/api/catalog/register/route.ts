@@ -13,7 +13,7 @@ import { NextResponse } from "next/server";
 
 // Desabilita o body size limit e o timeout do Edge runtime
 export const runtime = "nodejs";
-export const maxDuration = 1800; // 15 minutos (máximo no Vercel Pro / self-hosted ilimitado)
+export const maxDuration = 7200;
 
 const AI_BASE = process.env.API_BASE ?? "http://localhost:8000";
 

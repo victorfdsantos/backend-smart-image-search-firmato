@@ -1,4 +1,4 @@
-"""SearchController — busca por texto e/ou imagem via CLIP + ST + BM25 com filtros."""
+"""SearchController — busca por texto e/ou imagem via CLIP + ST + BM25 com filtros e paginação."""
 
 from typing import Optional
 
@@ -13,11 +13,13 @@ router = APIRouter(prefix="/search", tags=["Search"])
 
 _ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
+
 @router.post("")
 async def search(
     request: Request,
     q:                   Optional[str]        = Query(default=None),
-    top_k:               int                  = Query(default=20, ge=1, le=100),
+    page:                int                  = Query(default=1,  ge=1),
+    page_size:           int                  = Query(default=12, ge=1, le=100),
     marca:               Optional[str]        = Query(default=None),
     categoria_principal: Optional[str]        = Query(default=None),
     subcategoria:        Optional[str]        = Query(default=None),
@@ -34,7 +36,9 @@ async def search(
     image_bytes = None
     if image:
         if image.content_type not in _ALLOWED_IMAGE_TYPES:
-            raise HTTPException(status_code=400, detail=f"Formato inválido: {image.content_type}")
+            raise HTTPException(
+                status_code=400, detail=f"Formato inválido: {image.content_type}"
+            )
         image_bytes = await image.read()
 
     raw_filters = {
@@ -76,14 +80,15 @@ async def search(
         clip_device     = request.app.state.clip_device,
         st_model        = request.app.state.st_model,
         bm25            = request.app.state.bm25,
-        blob_repo       = request.app.state.blob_repo,   # ← passa o repo
+        blob_repo       = request.app.state.blob_repo,
     )
 
-    results = await service.search(        
+    result = await service.search(
         query       = q,
         image_bytes = image_bytes,
-        top_k       = top_k,
         allowed_ids = allowed_ids,
+        page        = page,
+        page_size   = page_size,
     )
 
-    return JSONResponse(content={"total": len(results), "items": results})
+    return JSONResponse(content=result)

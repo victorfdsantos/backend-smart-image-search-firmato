@@ -36,6 +36,11 @@ export function HomeClient() {
   const [isLoading, setIsLoading] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
 
+  // search também tem sua própria paginação
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchTotalPages, setSearchTotalPages] = useState(1);
+  const [searchTotal, setSearchTotal] = useState(0);
+
   // preview usa imagem de OUTPUT (alta qualidade)
   const [selectedImage, setSelectedImage] = useState("");
   const [selectedProduct, setSelectedProduct] = useState<ProductDetail | null>(null);
@@ -43,7 +48,7 @@ export function HomeClient() {
   const [similarProducts, setSimilarProducts] = useState<ProductSummary[]>([]);
 
   const isInSearch = !!(searchText.trim() || imageFileRef.current);
-  const debouncedSearch = useDebounce(searchText, 500);
+  const debouncedSearch = useDebounce(searchText, 1000);
 
   // ------------------------------------------------------------ URL sync
   const pushUrl = useCallback(
@@ -71,10 +76,10 @@ export function HomeClient() {
 
   // ------------------------------------------------------------ run search
   const runSearch = useCallback(
-    async (q: string, f = filters) => {
+    async (q: string, f = filters, p = 1) => {
       setIsSearching(true);
       try {
-        const data = await searchProducts(q || undefined, imageFileRef.current, 12, f);
+        const data = await searchProducts(q || undefined, imageFileRef.current, p, PAGE_SIZE, f);
 
         const enriched = await Promise.all(
           data.items.map(async (item) => {
@@ -94,8 +99,11 @@ export function HomeClient() {
         );
 
         setProducts(enriched);
-        setTotal(data.total);
-        setTotalPages(1);
+        setSearchTotal(data.total ?? enriched.length);
+        setSearchTotalPages(data.total_pages ?? 1);
+        setSearchPage(data.page ?? p);
+        setTotal(data.total ?? enriched.length);
+        setTotalPages(data.total_pages ?? 1);
       } finally {
         setIsSearching(false);
       }
@@ -109,10 +117,11 @@ export function HomeClient() {
       setSimilarProducts([]);
       try {
         const imgRes = await fetch(outputImgUrl, { mode: "cors" });
-        const blob = await imgRes.blob();
-        const file = new File([blob], "query.jpg", { type: "image/jpeg" });
+        const blob   = await imgRes.blob();
+        const file   = new File([blob], "query.jpg", { type: "image/jpeg" });
 
-        const data = await searchProducts(undefined, file, 10);
+        // busca similar: só imagem, sem paginação (página 1, 10 itens)
+        const data = await searchProducts(undefined, file, 1, 10);
 
         const enriched = await Promise.all(
           data.items
@@ -170,17 +179,17 @@ export function HomeClient() {
   // --------------------------------------------------------- on mount: URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const q  = params.get("q")    ?? "";
-    const p  = parseInt(params.get("page") ?? "1", 10);
-    const img = params.get("img") ?? "";
-    const f  = parseFiltersFromUrl(window.location.search);
+    const q   = params.get("q")    ?? "";
+    const p   = parseInt(params.get("page") ?? "1", 10);
+    const img = params.get("img")  ?? "";
+    const f   = parseFiltersFromUrl(window.location.search);
 
     setSearchText(q);
     setPage(Math.max(1, p));
     setFilters(f);
 
     if (q || Object.keys(f).length > 0) {
-      runSearch(q, f);
+      runSearch(q, f, p);
     } else {
       loadGallery(p, f);
     }
@@ -204,10 +213,12 @@ export function HomeClient() {
     if (!debouncedSearch.trim() && !imageFileRef.current) {
       loadGallery(1, filters);
       setPage(1);
+      setSearchPage(1);
       pushUrl({ filters });
       return;
     }
-    runSearch(debouncedSearch, filters);
+    runSearch(debouncedSearch, filters, 1);
+    setSearchPage(1);
     pushUrl({ q: debouncedSearch, filters });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [debouncedSearch]);
@@ -217,6 +228,7 @@ export function HomeClient() {
   const handleSearchChange = (text: string) => {
     setSearchText(text);
     setPage(1);
+    setSearchPage(1);
     setSelectedImage("");
     setSelectedProduct(null);
     setSimilarProducts([]);
@@ -224,7 +236,8 @@ export function HomeClient() {
 
   const handleSearchCommit = (text: string) => {
     setSearchText(text);
-    runSearch(text, filters);
+    runSearch(text, filters, 1);
+    setSearchPage(1);
     pushUrl({ q: text, filters });
   };
 
@@ -234,7 +247,8 @@ export function HomeClient() {
     reader.onload = (e) => setUploadedImage(e.target?.result as string);
     reader.readAsDataURL(file);
     setPage(1);
-    runSearch(searchText, filters);
+    setSearchPage(1);
+    runSearch(searchText, filters, 1);
     pushUrl({ q: searchText, filters });
   };
 
@@ -242,7 +256,8 @@ export function HomeClient() {
     imageFileRef.current = null;
     setUploadedImage("");
     if (searchText.trim()) {
-      runSearch(searchText, filters);
+      runSearch(searchText, filters, 1);
+      setSearchPage(1);
     } else {
       loadGallery(1, filters);
     }
@@ -259,7 +274,8 @@ export function HomeClient() {
         ? { ...prev, [field]: next }
         : Object.fromEntries(Object.entries(prev).filter(([k]) => k !== field));
       setPage(1);
-      if (isInSearch) runSearch(searchText, updated);
+      setSearchPage(1);
+      if (isInSearch) runSearch(searchText, updated, 1);
       else            loadGallery(1, updated);
       pushUrl({ q: searchText, filters: updated });
       return updated;
@@ -271,7 +287,8 @@ export function HomeClient() {
   const handleFilterClearAll = () => {
     setFilters({});
     setPage(1);
-    if (isInSearch) runSearch(searchText, {});
+    setSearchPage(1);
+    if (isInSearch) runSearch(searchText, {}, 1);
     else            loadGallery(1, {});
     pushUrl({ q: searchText });
   };
@@ -282,6 +299,7 @@ export function HomeClient() {
     setSearchText("");
     setFilters({});
     setPage(1);
+    setSearchPage(1);
     setSelectedImage("");
     setSelectedProduct(null);
     setSimilarProducts([]);
@@ -291,29 +309,60 @@ export function HomeClient() {
 
   const handleSelectProduct = (product: ProductSummary) => {
     const outputUrl = openProduct(product.id_produto);
-    pushUrl({ q: searchText, page, img: outputUrl, filters });
+    pushUrl({
+      q:       searchText,
+      page:    isInSearch ? searchPage : page,
+      img:     outputUrl,
+      filters,
+    });
   };
 
   const handleSelectSimilar = (product: ProductSummary) => {
     const outputUrl = openProduct(product.id_produto);
-    pushUrl({ q: searchText, page, img: outputUrl, filters });
+    pushUrl({
+      q:       searchText,
+      page:    isInSearch ? searchPage : page,
+      img:     outputUrl,
+      filters,
+    });
   };
 
+  // Paginação da galeria (modo não-busca)
   const handlePrevPage = () => {
-    if (page <= 1) return;
-    const p = page - 1;
-    setPage(p);
-    loadGallery(p, filters);
-    pushUrl({ q: searchText, page: p, filters });
+    if (isInSearch) {
+      if (searchPage <= 1) return;
+      const p = searchPage - 1;
+      setSearchPage(p);
+      runSearch(searchText, filters, p);
+      pushUrl({ q: searchText, page: p, filters });
+    } else {
+      if (page <= 1) return;
+      const p = page - 1;
+      setPage(p);
+      loadGallery(p, filters);
+      pushUrl({ q: searchText, page: p, filters });
+    }
   };
 
   const handleNextPage = () => {
-    if (page >= totalPages) return;
-    const p = page + 1;
-    setPage(p);
-    loadGallery(p, filters);
-    pushUrl({ q: searchText, page: p, filters });
+    if (isInSearch) {
+      if (searchPage >= searchTotalPages) return;
+      const p = searchPage + 1;
+      setSearchPage(p);
+      runSearch(searchText, filters, p);
+      pushUrl({ q: searchText, page: p, filters });
+    } else {
+      if (page >= totalPages) return;
+      const p = page + 1;
+      setPage(p);
+      loadGallery(p, filters);
+      pushUrl({ q: searchText, page: p, filters });
+    }
   };
+
+  const currentPage       = isInSearch ? searchPage       : page;
+  const currentTotalPages = isInSearch ? searchTotalPages : totalPages;
+  const currentTotal      = isInSearch ? searchTotal      : total;
 
   // ------------------------------------------------------------- render
 
@@ -350,7 +399,7 @@ export function HomeClient() {
                 Resultados
               </span>
               <span className="font-lato text-sm text-firmato-muted">
-                {total} produtos
+                {currentTotal} produtos
               </span>
             </div>
 
@@ -360,14 +409,12 @@ export function HomeClient() {
               onSelect={handleSelectProduct}
             />
 
-            {!isInSearch && (
-              <Pagination
-                page={page}
-                totalPages={totalPages}
-                onPrev={handlePrevPage}
-                onNext={handleNextPage}
-              />
-            )}
+            <Pagination
+              page={currentPage}
+              totalPages={currentTotalPages}
+              onPrev={handlePrevPage}
+              onNext={handleNextPage}
+            />
           </div>
         </div>
 

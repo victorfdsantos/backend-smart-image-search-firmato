@@ -1,4 +1,10 @@
-"""SearchService — busca híbrida CLIP + ST + BM25 com suporte a filtros em cascata."""
+"""SearchService — busca híbrida CLIP + ST + BM25 com suporte a filtros em cascata.
+
+Melhorias:
+- Detecção de marca na query (fuzzy, case-insensitive, antes de traduzir)
+- Threshold de similaridade 0.75 em vez de top_k fixo
+- Resultados paginados pelo caller
+"""
 
 import json
 import logging
@@ -13,25 +19,142 @@ import torch.nn.functional as F
 from PIL import Image
 
 
+# ---------------------------------------------------------------------------
+# Helpers genéricos
+# ---------------------------------------------------------------------------
+
 def _minmax(scores: np.ndarray) -> np.ndarray:
     mn, mx = scores.min(), scores.max()
     if mx - mn < 1e-9:
         return np.zeros_like(scores)
     return (scores - mn) / (mx - mn)
 
+
 def _tokenize(text: str) -> list[str]:
     text = unicodedata.normalize("NFD", text.lower())
     text = "".join(c for c in text if unicodedata.category(c) != "Mn")
-    return re.findall(r'\b\w+\b', text)
+    return re.findall(r"\b\w+\b", text)
+
+
+def _normalize(text: str) -> str:
+    """Remove acentos e converte para minúsculas."""
+    text = unicodedata.normalize("NFD", text.lower())
+    return "".join(c for c in text if unicodedata.category(c) != "Mn")
+
+
+# ---------------------------------------------------------------------------
+# Detecção de marca na query
+# ---------------------------------------------------------------------------
+
+def _brand_similarity(query_token: str, brand_token: str) -> float:
+    """
+    Similaridade simples entre dois tokens normalizados.
+    Retorna 1.0 se idênticos, valor parcial se um contém o outro
+    ou se a distância de edição for pequena.
+    """
+    if query_token == brand_token:
+        return 1.0
+    if brand_token in query_token or query_token in brand_token:
+        longer = max(len(query_token), len(brand_token))
+        shorter = min(len(query_token), len(brand_token))
+        return shorter / longer
+    # distância de edição simples (sem dependência externa)
+    a, b = query_token, brand_token
+    if abs(len(a) - len(b)) > max(2, int(0.4 * max(len(a), len(b)))):
+        return 0.0
+    # wagner-fischer com early exit
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            cost = 0 if ca == cb else 1
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
+        prev = curr
+    dist = prev[len(b)]
+    max_len = max(len(a), len(b))
+    similarity = 1.0 - dist / max_len
+    return similarity
+
+
+def detect_brand_in_query(
+    query: str,
+    brands: list[str],
+    threshold: float = 0.75,
+) -> tuple[Optional[str], str]:
+    """
+    Procura por nomes de marca na query (fuzzy, sem case/acento).
+
+    Retorna (marca_encontrada | None, query_sem_marca).
+
+    Estratégia:
+    - Normaliza query e cada marca.
+    - Para marcas de uma palavra: compara token a token.
+    - Para marcas multi-palavra: verifica subsequência de tokens.
+    - Aceita match se similaridade >= threshold.
+    """
+    if not brands or not query.strip():
+        return None, query
+
+    norm_query = _normalize(query)
+    query_tokens = re.findall(r"\b\w+\b", norm_query)
+
+    best_brand: Optional[str] = None
+    best_score: float = 0.0
+    best_span: tuple[int, int] = (0, 0)  # índices de tokens removidos
+
+    for brand in brands:
+        norm_brand = _normalize(brand)
+        brand_tokens = re.findall(r"\b\w+\b", norm_brand)
+        if not brand_tokens:
+            continue
+
+        n_bt = len(brand_tokens)
+
+        # Tenta fazer sliding window de n_bt tokens na query
+        for start in range(len(query_tokens) - n_bt + 1):
+            window = query_tokens[start: start + n_bt]
+            # Média da similaridade token a token
+            score = sum(
+                _brand_similarity(wt, bt)
+                for wt, bt in zip(window, brand_tokens)
+            ) / n_bt
+
+            if score > best_score and score >= threshold:
+                best_score = score
+                best_brand = brand
+                best_span = (start, start + n_bt)
+
+    if best_brand is None:
+        return None, query
+
+    # Remove os tokens da marca da query original (preservando o resto)
+    remaining_tokens = (
+        query_tokens[: best_span[0]] + query_tokens[best_span[1]:]
+    )
+    clean_query = " ".join(remaining_tokens).strip()
+    return best_brand, clean_query
+
+
+# ---------------------------------------------------------------------------
+# SearchService
+# ---------------------------------------------------------------------------
+
+SIMILARITY_THRESHOLD = 0.65
+
 
 class SearchService:
 
     _CONTAINER = "firmato-catalogo"
 
     def __init__(
-        self, logger: logging.Logger,
-        clip_embeddings, text_embeddings, metadata,
-        clip_model, clip_processor, clip_device,
+        self,
+        logger: logging.Logger,
+        clip_embeddings,
+        text_embeddings,
+        metadata,
+        clip_model,
+        clip_processor,
+        clip_device,
         st_model=None,
         bm25=None,
         blob_repo=None,
@@ -45,7 +168,7 @@ class SearchService:
         self.clip_device = clip_device
         self.st_model    = st_model
         self.bm25        = bm25
-        self.blob        = blob_repo  # BlobStorageRepository (async)
+        self.blob        = blob_repo
 
     # ------------------------------------------------------------------
     # Ponto de entrada
@@ -55,30 +178,65 @@ class SearchService:
         self,
         query: str = None,
         image_bytes: bytes = None,
-        top_k: int = 20,
+        top_k: int = 200,           # upper-bound de candidatos brutos
         allowed_ids: Optional[set] = None,
-    ) -> list[dict]:
+        page: int = 1,
+        page_size: int = 20,
+        similarity_threshold: float = SIMILARITY_THRESHOLD,
+    ) -> dict:
+        """
+        Retorna um dict com:
+          {
+            "total": int,
+            "page": int,
+            "page_size": int,
+            "total_pages": int,
+            "items": [ ... ]
+          }
+        """
         if self.clip_emb is None or self.clip_model is None:
             self.logger.warning("[Search] Embeddings ou CLIP não disponíveis.")
-            return []
+            return self._empty_page(page, page_size)
 
         has_text  = bool(query and query.strip())
         has_image = bool(image_bytes)
 
         if not has_text and not has_image:
-            return []
+            return self._empty_page(page, page_size)
 
         n = len(self.metadata)
-        clip_scores = np.zeros(n)
-        st_scores   = np.zeros(n)
-        bm25_scores = np.zeros(n)
+        clip_scores  = np.zeros(n)
+        st_scores    = np.zeros(n)
+        bm25_scores  = np.zeros(n)
+        brand_filter: Optional[set[str]] = None
 
-        # ── CLIP ──────────────────────────────────────────────────────
-        if has_image and has_text:
+        # ── Fase 1: detecção de marca ──────────────────────────────────
+        remaining_query = query or ""
+        if has_text:
+            brands = self._collect_brands()
+            detected_brand, remaining_query = detect_brand_in_query(
+                query, brands
+            )
+            if detected_brand:
+                self.logger.info(
+                    f"[Search] Marca detectada: '{detected_brand}' "
+                    f"| query restante: '{remaining_query}'"
+                )
+                brand_filter = self._ids_for_brand(detected_brand)
+                self.logger.info(
+                    f"[Search] Produtos filtrados pela marca: {len(brand_filter)}"
+                )
+
+        # ── Fase 2: scoring semântico ──────────────────────────────────
+        text_for_scoring = remaining_query.strip() or None
+        effective_has_text = bool(text_for_scoring)
+
+        # CLIP
+        if has_image and effective_has_text:
             img_vec = self._encode_image(image_bytes)
-            txt_vec = self._encode_text_clip(query)
+            txt_vec = self._encode_text_clip(text_for_scoring)
             if img_vec is not None and txt_vec is not None:
-                combined = (img_vec + txt_vec) / 2
+                combined  = (img_vec + txt_vec) / 2
                 query_vec = combined / (np.linalg.norm(combined) + 1e-9)
             elif img_vec is not None:
                 query_vec = img_vec
@@ -92,63 +250,130 @@ class SearchService:
             if img_vec is not None:
                 clip_scores = self.clip_emb @ img_vec
 
-        elif has_text:
-            txt_vec = self._encode_text_clip(query)
+        elif effective_has_text:
+            txt_vec = self._encode_text_clip(text_for_scoring)
             if txt_vec is not None:
                 clip_scores = self.clip_emb @ txt_vec
 
-        # ── ST ────────────────────────────────────────────────────────
-        if has_text and self.text_emb is not None and self.st_model is not None:
-            st_vec    = self.st_model.encode(query, normalize_embeddings=True)
+        elif has_text and not effective_has_text:
+            # A query era só a marca — usa CLIP neutro (tudo zero, só filtra)
+            pass
+
+        # ST
+        if effective_has_text and self.text_emb is not None and self.st_model is not None:
+            st_vec    = self.st_model.encode(text_for_scoring, normalize_embeddings=True)
             st_scores = self.text_emb @ st_vec
 
-        # ── BM25 ──────────────────────────────────────────────────────
-        if has_text and self.bm25 is not None:
-            tokens      = _tokenize(query)
+        # BM25
+        if effective_has_text and self.bm25 is not None:
+            tokens      = _tokenize(text_for_scoring)
             bm25_scores = np.array(self.bm25.get_scores(tokens))
 
         # ── Pesos ─────────────────────────────────────────────────────
-        if has_image and has_text:
+        if has_image and effective_has_text:
             w_clip, w_st, w_bm25 = 0.50, 0.30, 0.20
         elif has_image:
             w_clip, w_st, w_bm25 = 1.0, 0.0, 0.0
+        elif effective_has_text:
+            w_clip, w_st, w_bm25 = 0.40, 0.35, 0.25
         else:
+            # só marca, sem texto residual → pontuação uniforme
             w_clip, w_st, w_bm25 = 0.40, 0.35, 0.25
 
         final = (
-            w_clip * _minmax(clip_scores) +
-            w_st   * _minmax(st_scores)   +
-            w_bm25 * _minmax(bm25_scores)
+            w_clip * _minmax(clip_scores)
+            + w_st  * _minmax(st_scores)
+            + w_bm25 * _minmax(bm25_scores)
         )
 
-        # ── Filtra allowed_ids e retorna top_k ────────────────────────
+        # ── Filtragem e threshold ──────────────────────────────────────
         order = np.argsort(final)[::-1]
-        results = []
+
+        # Combina filtros: marca + allowed_ids externos
+        effective_ids: Optional[set[str]] = None
+        if brand_filter is not None and allowed_ids is not None:
+            effective_ids = brand_filter & {str(x) for x in allowed_ids}
+        elif brand_filter is not None:
+            effective_ids = brand_filter
+        elif allowed_ids is not None:
+            effective_ids = {str(x) for x in allowed_ids}
+
+        # Se a query era SOMENTE a marca (sem texto residual e sem imagem),
+        # desabilita o threshold para não filtrar por score neutro
+        apply_threshold = effective_has_text or has_image
+
+        candidates = []
         for idx in order:
-            if len(results) >= top_k:
+            if len(candidates) >= top_k:
                 break
+            score = float(final[idx])
+            if apply_threshold and score < similarity_threshold:
+                break  # lista está ordenada, podemos parar
+
             meta = self.metadata[idx]
             pid  = str(meta.get("id", ""))
 
-            if allowed_ids is not None and pid not in {str(x) for x in allowed_ids}:
+            if effective_ids is not None and pid not in effective_ids:
                 continue
 
-            product = await self._load_json(pid)
-            if product is None:
-                continue
-            if str(product.get("status", "")).strip().lower() != "ativo":
+            if str(meta.get("status", "ativo")).strip().lower() != "ativo":
                 continue
 
-            results.append({
+            candidates.append({
                 "id_produto": pid,
-                "score":      float(final[idx]),
+                "score":      score,
                 "score_clip": float(clip_scores[idx]),
                 "score_st":   float(st_scores[idx]),
                 "score_bm25": float(bm25_scores[idx]),
                 "imagem_url": f"/api/products/thumbnail/{pid}.jpg",
             })
 
-        return results
+        # ── Paginação ─────────────────────────────────────────────────
+        total       = len(candidates)
+        total_pages = max(1, -(-total // page_size))  # ceil division
+        page        = max(1, min(page, total_pages))
+        start       = (page - 1) * page_size
+        page_items  = candidates[start: start + page_size]
+
+        self.logger.info(
+            f"[Search] total_candidates={total} "
+            f"page={page}/{total_pages} items={len(page_items)}"
+        )
+
+        return {
+            "total":       total,
+            "page":        page,
+            "page_size":   page_size,
+            "total_pages": total_pages,
+            "items":       page_items,
+        }
+
+    # ------------------------------------------------------------------
+    # Brand helpers
+    # ------------------------------------------------------------------
+
+    def _collect_brands(self) -> list[str]:
+        """Extrai lista única de marcas do metadata em memória."""
+        seen: set[str] = set()
+        brands: list[str] = []
+        for entry in self.metadata:
+            b = (entry.get("marca") or "").strip()
+            if b and b not in seen:
+                seen.add(b)
+                brands.append(b)
+        return brands
+
+    def _ids_for_brand(self, brand: str) -> set[str]:
+        """Retorna set de product ids cuja marca bate com a detectada."""
+        norm_brand = _normalize(brand)
+        result: set[str] = set()
+        for entry in self.metadata:
+            entry_brand = _normalize((entry.get("marca") or ""))
+            if entry_brand == norm_brand:
+                pid = str(entry.get("id", ""))
+                if pid:
+                    result.add(pid)
+        return result
 
     # ------------------------------------------------------------------
     # Encoders
@@ -174,7 +399,7 @@ class SearchService:
 
     def _encode_image(self, image_bytes: bytes) -> Optional[np.ndarray]:
         try:
-            img = Image.open(BytesIO(image_bytes)).convert("RGB")
+            img    = Image.open(BytesIO(image_bytes)).convert("RGB")
             inputs = self.clip_proc(images=img, return_tensors="pt").to(self.clip_device)
             with torch.no_grad():
                 emb = self.clip_model.get_image_features(**inputs)
@@ -189,11 +414,31 @@ class SearchService:
 
     async def _load_json(self, product_id: str) -> Optional[dict]:
         if self.blob is None:
-            self.logger.warning("[Search] blob_repo não disponível — não foi possível carregar JSON do produto.")
+            self.logger.warning(
+                "[Search] blob_repo não disponível — não foi possível carregar JSON."
+            )
             return None
         try:
-            data = await self.blob.download(self._CONTAINER, f"data/{product_id}.json")
+            data = await self.blob.download(
+                self._CONTAINER, f"data/{product_id}.json"
+            )
             return json.loads(data)
         except Exception as exc:
-            self.logger.warning(f"[Search] JSON não encontrado no Blob | pid={product_id}: {exc}")
+            self.logger.warning(
+                f"[Search] JSON não encontrado no Blob | pid={product_id}: {exc}"
+            )
             return None
+
+    # ------------------------------------------------------------------
+    # Util
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _empty_page(page: int, page_size: int) -> dict:
+        return {
+            "total":       0,
+            "page":        page,
+            "page_size":   page_size,
+            "total_pages": 1,
+            "items":       [],
+        }
