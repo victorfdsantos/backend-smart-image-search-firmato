@@ -1,5 +1,17 @@
+# ============================================================
+# LOCAL DEVELOPMENT — runs all services including AI
+# Usage:
+#   cp .env.local.example .env
+#   docker compose up -d
+#
+# To run WITHOUT the AI service locally (use Azure VM AI instead):
+#   docker compose --profile no-ai up -d
+#   (then set AI_SERVICE_URL in .env to your VM address)
+# ============================================================
+
 services:
 
+  # ── Backend ────────────────────────────────────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -9,16 +21,12 @@ services:
     container_name: firmato-backend
     restart: unless-stopped
     ports:
-      - "8000:8000"   # acessível em localhost:8000 (Insomnia / curl direto)
+      - "8000:8000"
+    env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
       - HF_HOME=/app/.cache/huggingface
-      - CORS_ORIGINS=http://localhost,http://firmato.local
-      - SHAREPOINT_CLIENT_SECRET=${SHAREPOINT_CLIENT_SECRET}
-      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
     volumes:
-      - ./backend/src/config.ini:/app/src/config.ini:ro
-      - ./backend/src/config:/app/src/config
       - clip_cache:/app/.cache/huggingface
     tmpfs:
       - /app/src/tmp_images:size=512m,uid=1000,gid=1000
@@ -44,9 +52,7 @@ services:
         max-size: "50m"
         max-file: "5"
 
-  # ---------------------------------------------------------------------------
-  # AI Service — indexação e retreinamento incremental de embeddings
-  # ---------------------------------------------------------------------------
+  # ── AI Service (local GPU / CPU) ────────────────────────────────────────────
   ai:
     build:
       context: ./ai
@@ -55,11 +61,11 @@ services:
     container_name: firmato-ai
     restart: unless-stopped
     ports:
-      - "9000:9000"   # acessível em localhost:9000 (Insomnia / curl direto)
+      - "9000:9000"
+    env_file: .env
     environment:
       - PYTHONUNBUFFERED=1
       - HF_HOME=/app/.cache/huggingface
-      - AZURE_STORAGE_CONNECTION_STRING=${AZURE_STORAGE_CONNECTION_STRING}
     volumes:
       - ./ai/src/config.ini:/app/src/config.ini:ro
       - clip_cache:/app/.cache/huggingface
@@ -68,7 +74,7 @@ services:
              "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
       interval: 30s
       timeout: 10s
-      start_period: 90s
+      start_period: 120s
       retries: 3
     deploy:
       resources:
@@ -84,6 +90,7 @@ services:
         max-size: "50m"
         max-file: "5"
 
+  # ── Frontend ────────────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -92,10 +99,10 @@ services:
     container_name: firmato-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"   # acessível direto em localhost:3000 além do nginx :80
+      - "3000:3000"
+    env_file: .env
     environment:
       - NODE_ENV=production
-      - API_BASE=http://backend:8000
     depends_on:
       backend:
         condition: service_healthy
@@ -119,6 +126,7 @@ services:
         max-size: "20m"
         max-file: "3"
 
+  # ── Nginx reverse proxy ─────────────────────────────────────────────────────
   nginx:
     image: nginx:1.27-alpine
     container_name: firmato-nginx

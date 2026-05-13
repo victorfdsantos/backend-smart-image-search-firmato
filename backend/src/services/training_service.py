@@ -1,20 +1,25 @@
 """
 TrainingService — cliente HTTP que chama o AI Service para retreinamento.
 
-Usa asyncio.to_thread para não bloquear o event loop do FastAPI, já que
-requests é síncrono.
+A URL do AI Service é lida da variável de ambiente AI_SERVICE_URL,
+o que permite apontar para o serviço local (Docker) ou para a VM na Azure
+sem alterar o código.
 """
 
 import asyncio
 import logging
+import os
 
 import requests
 
 
 class TrainingService:
 
-    _AI_URL     = "http://ai:9000/training"
-    _TIMEOUT    = 600  # segundos — o treino pode demorar
+    # Lê a URL do AI Service da variável de ambiente.
+    # Local:  AI_SERVICE_URL=http://ai:9000      (nome do serviço no Docker)
+    # Azure:  AI_SERVICE_URL=http://<IP_VM>:9000
+    _AI_URL = os.getenv("AI_SERVICE_URL", "http://ai:9000").rstrip("/") + "/training"
+    _TIMEOUT = 600  # segundos — o treino pode demorar
 
     def __init__(self, logger: logging.Logger):
         self.logger = logger
@@ -29,7 +34,8 @@ class TrainingService:
         Retorna True em sucesso, False em qualquer falha.
         """
         self.logger.info(
-            f"[Training] Iniciando | image_ids={len(image_ids)} | data_ids={len(data_ids)}"
+            f"[Training] Iniciando | url={self._AI_URL} "
+            f"| image_ids={len(image_ids)} | data_ids={len(data_ids)}"
         )
         return await asyncio.to_thread(self._post, image_ids, data_ids)
 
@@ -64,8 +70,6 @@ class TrainingService:
                         f"[Training] OK | status={status} elapsed={elapsed}s"
                     )
 
-                # "partial" ainda é sucesso — alguns IDs podem ter falhado
-                # por imagem ausente, mas os demais foram indexados
                 return True
 
             self.logger.warning(

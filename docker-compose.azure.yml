@@ -1,0 +1,71 @@
+# ============================================================
+# AZURE APP SERVICE — multi-container Linux deployment
+#
+# How to deploy:
+#   1. Push images to Azure Container Registry (ACR):
+#        az acr login --name <your-acr>
+#        docker compose -f docker-compose.azure.yml build
+#        docker compose -f docker-compose.azure.yml push
+#
+#   2. In App Service → Deployment Center → Container:
+#        - Source: Azure Container Registry
+#        - Config file: paste this file (or point to it in ACR)
+#
+#   3. Set Application Settings from .env.azure.example
+#
+# Notes:
+#   - AI service is NOT included here — it runs on the Azure VM.
+#     The backend reaches it via AI_SERVICE_URL env var.
+#   - App Service does not support named volumes from the host.
+#     clip_cache is omitted; models are downloaded on first start
+#     and cached in /app/.cache/huggingface inside the container.
+#     Use a persistent storage mount if you want to keep the cache.
+#   - WEBSITES_PORT must be set to 80 in App Service config.
+# ============================================================
+
+services:
+
+  backend:
+    image: <YOUR_ACR>.azurecr.io/firmato-backend:latest
+    restart: always
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_HOME=/app/.cache/huggingface
+      # The following vars come from App Service Application Settings:
+      # AZURE_STORAGE_CONNECTION_STRING
+      # SHAREPOINT_CLIENT_SECRET
+      # AI_SERVICE_URL
+      # CORS_ORIGINS
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+  frontend:
+    image: <YOUR_ACR>.azurecr.io/firmato-frontend:latest
+    restart: always
+    environment:
+      - NODE_ENV=production
+      - API_BASE=http://backend:8000
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "80:80"
+    volumes:
+      - ${WEBAPP_STORAGE_HOME}/nginx/firmato.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend

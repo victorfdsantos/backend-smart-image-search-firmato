@@ -1,0 +1,60 @@
+# ============================================================
+# AI SERVICE — runs on the Azure VM (or locally when you
+# need to test the AI in isolation)
+#
+# Usage on the VM:
+#   git clone <repo> && cd repo
+#   cp .env.local.example .env   # fill in AZURE_STORAGE_CONNECTION_STRING
+#   docker compose -f docker-compose.ai.yml up -d
+#
+# Usage locally (standalone AI, no other services):
+#   docker compose -f docker-compose.ai.yml up -d
+#
+# Security note:
+#   Port 9000 should be restricted via Azure NSG to only allow
+#   inbound traffic from the App Service outbound IPs.
+#   Do NOT expose it to 0.0.0.0/0 in production.
+# ============================================================
+
+services:
+
+  ai:
+    build:
+      context: ./ai
+      dockerfile: Dockerfile
+    image: firmato-ai:latest
+    container_name: firmato-ai
+    restart: unless-stopped
+    ports:
+      # Bind to all interfaces so App Service can reach it.
+      # Lock this down with Azure NSG rules.
+      - "9000:9000"
+    env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - HF_HOME=/app/.cache/huggingface
+    volumes:
+      - ./ai/src/config.ini:/app/src/config.ini:ro
+      - clip_cache:/app/.cache/huggingface
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:9000/health')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 120s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 4G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+volumes:
+  clip_cache:
+    driver: local
