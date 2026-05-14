@@ -103,6 +103,7 @@ services:
     env_file: .env
     environment:
       - NODE_ENV=production
+      - API_BASE=http://firmato-api:8000
     depends_on:
       backend:
         condition: service_healthy

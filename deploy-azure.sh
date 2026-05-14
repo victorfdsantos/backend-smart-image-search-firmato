@@ -16,9 +16,9 @@
 set -euo pipefail
 
 # ── Configurações — ajuste para o seu ambiente ────────────────────────────────
-ACR_NAME="seuacr"                          # nome do Azure Container Registry (sem .azurecr.io)
-RESOURCE_GROUP="firmato-rg"               # Resource Group do App Service
-APP_SERVICE_NAME="firmato-app"            # nome do App Service
+ACR_NAME="firmatointeligencia"                          # nome do Azure Container Registry (sem .azurecr.io)
+RESOURCE_GROUP="SYNNEX"               # Resource Group do App Service
+APP_SERVICE_NAME="firmato-inteligencia"            # nome do App Service
 # ─────────────────────────────────────────────────────────────────────────────
 
 ACR_LOGIN_SERVER="${ACR_NAME}.azurecr.io"
