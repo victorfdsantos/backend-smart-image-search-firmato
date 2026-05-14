@@ -68,10 +68,6 @@ class FilterService:
     def get_filtered_ids(self, active_filters: dict[str, list[str]]) -> set[str]:
         return self._ids_for_filters(active_filters) or set()
 
-    # alias usado em search_controller
-    def filter_product_ids(self, active_filters: dict[str, list[str]]) -> set[str]:
-        return self.get_filtered_ids(active_filters)
-
     # --------------------------------------------------
     # INTERNAL
     # --------------------------------------------------

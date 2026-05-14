@@ -21,34 +21,36 @@ const PAGE_SIZE = 12;
 
 export function HomeClient() {
   // ----------------------------------------------------------------- state
-  const [importOpen, setImportOpen] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
+  const [importOpen,   setImportOpen]   = useState(false);
+  const [isUpdating,   setIsUpdating]   = useState(false);
 
-  const [searchText, setSearchText] = useState("");
+  const [searchText,    setSearchText]    = useState("");
   const [uploadedImage, setUploadedImage] = useState("");
-  const imageFileRef = useRef<File | null>(null);
+  const imageFileRef    = useRef<File | null>(null);
   const [filters, setFilters] = useState<FilterMap>({});
 
-  const [products, setProducts] = useState<ProductSummary[]>([]);
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [total, setTotal] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
+  // Ref para cancelar o debounce quando o usuário pressiona Enter
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [products,    setProducts]    = useState<ProductSummary[]>([]);
+  const [page,        setPage]        = useState(1);
+  const [totalPages,  setTotalPages]  = useState(1);
+  const [total,       setTotal]       = useState(0);
+  const [isLoading,   setIsLoading]   = useState(false);
   const [isSearching, setIsSearching] = useState(false);
 
-  // search também tem sua própria paginação
-  const [searchPage, setSearchPage] = useState(1);
+  const [searchPage,       setSearchPage]       = useState(1);
   const [searchTotalPages, setSearchTotalPages] = useState(1);
-  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchTotal,      setSearchTotal]      = useState(0);
 
   // preview usa imagem de OUTPUT (alta qualidade)
-  const [selectedImage, setSelectedImage] = useState("");
+  const [selectedImage,   setSelectedImage]   = useState("");
   const [selectedProduct, setSelectedProduct] = useState<ProductDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingDetail,   setLoadingDetail]   = useState(false);
   const [similarProducts, setSimilarProducts] = useState<ProductSummary[]>([]);
 
-  const isInSearch = !!(searchText.trim() || imageFileRef.current);
-  const debouncedSearch = useDebounce(searchText, 1000);
+  const isInSearch  = !!(searchText.trim() || imageFileRef.current);
+  const debouncedSearch = useDebounce(searchText, 800);
 
   // ------------------------------------------------------------ URL sync
   const pushUrl = useCallback(
@@ -75,34 +77,32 @@ export function HomeClient() {
   );
 
   // ------------------------------------------------------------ run search
+  // O backend já devolve nome_produto, marca, categoria_principal e
+  // faixa_preco dentro de cada item — não precisamos chamar getProductDetail
+  // para cada resultado (eliminação do N+1).
   const runSearch = useCallback(
     async (q: string, f = filters, p = 1) => {
       setIsSearching(true);
       try {
         const data = await searchProducts(q || undefined, imageFileRef.current, p, PAGE_SIZE, f);
 
-        const enriched = await Promise.all(
-          data.items.map(async (item) => {
-            const detail = await getProductDetail(item.id_produto);
-            return {
-              id_produto:          item.id_produto,
-              imagem_url:          thumbnailUrl(item.id_produto),
-              nome_produto:        detail?.nome_produto        ?? "",
-              marca:               detail?.marca               ?? "",
-              categoria_principal: detail?.categoria_principal ?? "",
-              faixa_preco:         detail?.faixa_preco         ?? "",
-              altura_cm:           detail?.altura_cm,
-              largura_cm:          detail?.largura_cm,
-              profundidade_cm:     detail?.profundidade_cm,
-            } satisfies ProductSummary;
-          })
-        );
+        const items: ProductSummary[] = data.items.map((item) => ({
+          id_produto:          item.id_produto,
+          imagem_url:          thumbnailUrl(item.id_produto),
+          nome_produto:        item.nome_produto        ?? "",
+          marca:               item.marca               ?? "",
+          categoria_principal: item.categoria_principal ?? "",
+          faixa_preco:         item.faixa_preco         ?? "",
+          altura_cm:           item.altura_cm,
+          largura_cm:          item.largura_cm,
+          profundidade_cm:     item.profundidade_cm,
+        }));
 
-        setProducts(enriched);
-        setSearchTotal(data.total ?? enriched.length);
+        setProducts(items);
+        setSearchTotal(data.total ?? items.length);
         setSearchTotalPages(data.total_pages ?? 1);
         setSearchPage(data.page ?? p);
-        setTotal(data.total ?? enriched.length);
+        setTotal(data.total ?? items.length);
         setTotalPages(data.total_pages ?? 1);
       } finally {
         setIsSearching(false);
@@ -112,38 +112,35 @@ export function HomeClient() {
   );
 
   // ------------------------------------------------------- similar products
+  // Usa thumbnail (250px) em vez da imagem output (1200px) — mesma qualidade
+  // para o CLIP, ~20× menos dados trafegados.
   const loadSimilar = useCallback(
-    async (productId: string | number, outputImgUrl: string) => {
+    async (productId: string | number) => {
       setSimilarProducts([]);
       try {
-        const imgRes = await fetch(outputImgUrl, { mode: "cors" });
-        const blob   = await imgRes.blob();
-        const file   = new File([blob], "query.jpg", { type: "image/jpeg" });
+        const thumbUrl = thumbnailUrl(productId);
+        const imgRes   = await fetch(thumbUrl, { mode: "cors" });
+        const blob     = await imgRes.blob();
+        const file     = new File([blob], "query.jpg", { type: "image/jpeg" });
 
-        // busca similar: só imagem, sem paginação (página 1, 10 itens)
         const data = await searchProducts(undefined, file, 1, 10);
 
-        const enriched = await Promise.all(
-          data.items
-            .filter((item) => String(item.id_produto) !== String(productId))
-            .slice(0, 6)
-            .map(async (item) => {
-              const detail = await getProductDetail(item.id_produto);
-              return {
-                id_produto:          item.id_produto,
-                imagem_url:          thumbnailUrl(item.id_produto),
-                nome_produto:        detail?.nome_produto        ?? "",
-                marca:               detail?.marca               ?? "",
-                categoria_principal: detail?.categoria_principal ?? "",
-                faixa_preco:         detail?.faixa_preco         ?? "",
-                altura_cm:           detail?.altura_cm,
-                largura_cm:          detail?.largura_cm,
-                profundidade_cm:     detail?.profundidade_cm,
-              } satisfies ProductSummary;
-            })
-        );
+        const items: ProductSummary[] = data.items
+          .filter((item) => String(item.id_produto) !== String(productId))
+          .slice(0, 6)
+          .map((item) => ({
+            id_produto:          item.id_produto,
+            imagem_url:          thumbnailUrl(item.id_produto),
+            nome_produto:        item.nome_produto        ?? "",
+            marca:               item.marca               ?? "",
+            categoria_principal: item.categoria_principal ?? "",
+            faixa_preco:         item.faixa_preco         ?? "",
+            altura_cm:           item.altura_cm,
+            largura_cm:          item.largura_cm,
+            profundidade_cm:     item.profundidade_cm,
+          }));
 
-        setSimilarProducts(enriched);
+        setSimilarProducts(items);
       } catch {
         setSimilarProducts([]);
       }
@@ -170,7 +167,7 @@ export function HomeClient() {
       setSelectedProduct(null);
       setSimilarProducts([]);
       loadDetail(productId);
-      loadSimilar(productId, outputUrl);
+      loadSimilar(productId);
       return outputUrl;
     },
     [loadDetail, loadSimilar]
@@ -179,9 +176,9 @@ export function HomeClient() {
   // --------------------------------------------------------- on mount: URL
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const q   = params.get("q")    ?? "";
+    const q   = params.get("q")   ?? "";
     const p   = parseInt(params.get("page") ?? "1", 10);
-    const img = params.get("img")  ?? "";
+    const img = params.get("img") ?? "";
     const f   = parseFiltersFromUrl(window.location.search);
 
     setSearchText(q);
@@ -200,7 +197,7 @@ export function HomeClient() {
         const pid = match[1];
         setSelectedImage(imageUrl(pid));
         loadDetail(pid);
-        loadSimilar(pid, imageUrl(pid));
+        loadSimilar(pid);
       } else {
         setSelectedImage(img);
       }
@@ -234,7 +231,12 @@ export function HomeClient() {
     setSimilarProducts([]);
   };
 
+  // Cancela o debounce pendente e dispara imediatamente
   const handleSearchCommit = (text: string) => {
+    if (debounceRef.current) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
     setSearchText(text);
     runSearch(text, filters, 1);
     setSearchPage(1);
@@ -327,7 +329,6 @@ export function HomeClient() {
     });
   };
 
-  // Paginação da galeria (modo não-busca)
   const handlePrevPage = () => {
     if (isInSearch) {
       if (searchPage <= 1) return;

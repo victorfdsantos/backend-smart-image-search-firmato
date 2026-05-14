@@ -14,7 +14,7 @@ class StartupService:
         self.blob = blob_repo
 
     # --------------------------------------------------
-    # ENTRYPOINT
+    # ENTRYPOINT — full startup (models + indices)
     # --------------------------------------------------
 
     async def run(self, app_state: dict) -> None:
@@ -27,14 +27,31 @@ class StartupService:
         self.logger.info("[Startup] Service pronto.")
 
     # --------------------------------------------------
+    # RELOAD INDICES — chamado após cada treino bem-sucedido
+    # Recarrega apenas embeddings + bm25 + filter_index;
+    # NÃO recarrega modelos CLIP/ST (já estão em memória).
+    # --------------------------------------------------
+
+    async def reload_indices(self, app_state: dict) -> None:
+        """
+        Recarrega embeddings, BM25 e filter_index do Blob para o app_state.
+        Chamado pelo catalog_controller após um retreino bem-sucedido.
+        """
+        self.logger.info("[Startup] Recarregando índices do Blob...")
+        await self._load_embeddings(app_state)
+        await self._load_bm25(app_state)
+        await self._load_filter_index(app_state)
+        self.logger.info("[Startup] Índices recarregados com sucesso.")
+
+    # --------------------------------------------------
     # EMBEDDINGS (BLOB)
     # --------------------------------------------------
 
     async def _load_embeddings(self, app_state: dict) -> None:
         container = "firmato-catalogo"
 
-        app_state["clip_embeddings"]    = None
-        app_state["text_embeddings"]    = None
+        app_state["clip_embeddings"]     = None
+        app_state["text_embeddings"]     = None
         app_state["embeddings_metadata"] = None
 
         try:

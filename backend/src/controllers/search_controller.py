@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from services.filter_service import FilterService
 from services.search_service import SearchService
+from utils.filters import parse_active_filters
 from utils.logger import setup_logger
 
 router = APIRouter(prefix="/search", tags=["Search"])
@@ -41,20 +42,15 @@ async def search(
             )
         image_bytes = await image.read()
 
-    raw_filters = {
-        "marca":               marca,
-        "categoria_principal": categoria_principal,
-        "subcategoria":        subcategoria,
-        "faixa_preco":         faixa_preco,
-        "ambiente":            ambiente,
-        "forma":               forma,
-        "material_principal":  material_principal,
-    }
-    active_filters = {
-        k: [v.strip() for v in val.split(",") if v.strip()]
-        for k, val in raw_filters.items()
-        if val and val.strip()
-    }
+    active_filters = parse_active_filters(
+        marca               = marca,
+        categoria_principal = categoria_principal,
+        subcategoria        = subcategoria,
+        faixa_preco         = faixa_preco,
+        ambiente            = ambiente,
+        forma               = forma,
+        material_principal  = material_principal,
+    )
 
     logger = setup_logger("search")
 
@@ -64,7 +60,7 @@ async def search(
             logger       = logger,
             filter_index = request.app.state.filter_index,
         )
-        allowed_ids = filter_service.filter_product_ids(active_filters)
+        allowed_ids = filter_service.get_filtered_ids(active_filters)
         logger.info(
             f"[Search] Filtros: {active_filters} → "
             f"{len(allowed_ids) if allowed_ids else 0} IDs"

@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from services.filter_service import FilterService
 from services.product_service import ProductService
+from utils.filters import parse_active_filters
 from utils.logger import setup_logger
 
 router = APIRouter(prefix="/products", tags=["Products"])
@@ -32,20 +33,15 @@ async def list_products(
 
     logger = setup_logger("product_list")
 
-    raw = {
-        "marca":               marca,
-        "categoria_principal": categoria_principal,
-        "subcategoria":        subcategoria,
-        "faixa_preco":         faixa_preco,
-        "ambiente":            ambiente,
-        "forma":               forma,
-        "material_principal":  material_principal,
-    }
-    active_filters = {
-        k: [v.strip() for v in val.split(",") if v.strip()]
-        for k, val in raw.items()
-        if val and val.strip()
-    }
+    active_filters = parse_active_filters(
+        marca               = marca,
+        categoria_principal = categoria_principal,
+        subcategoria        = subcategoria,
+        faixa_preco         = faixa_preco,
+        ambiente            = ambiente,
+        forma               = forma,
+        material_principal  = material_principal,
+    )
 
     allowed_ids: Optional[set] = None
     if active_filters:
@@ -58,8 +54,8 @@ async def list_products(
 
     service = ProductService(logger=logger, blob_repo=request.app.state.blob_repo)
     result  = await service.list_active(
-        page       = page,
-        page_size  = page_size,
+        page        = page,
+        page_size   = page_size,
         allowed_ids = allowed_ids,
     )
 

@@ -2,14 +2,18 @@
 
 Melhorias:
 - Detecção de marca na query (fuzzy, case-insensitive, antes de traduzir)
-- Threshold de similaridade 0.75 em vez de top_k fixo
+- Threshold de similaridade 0.65
 - Resultados paginados pelo caller
+- Cache LRU de tradução PT→EN para evitar requests externos repetidos
+- Resultados já enriquecidos com campos do metadata em memória
+  (elimina N+1 de getProductDetail no frontend)
 """
 
 import json
 import logging
 import re
 import unicodedata
+from functools import lru_cache
 from io import BytesIO
 from typing import Optional
 
@@ -43,26 +47,36 @@ def _normalize(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Cache de tradução PT → EN
+# Evita um request HTTP externo a cada busca com a mesma query.
+# lru_cache é thread-safe para leituras; o pior caso é um miss duplo
+# em concorrência alta, o que é aceitável.
+# ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=128)
+def _translate_cached(text: str) -> str:
+    """Traduz PT→EN com cache em memória. Retorna o original em caso de falha."""
+    try:
+        from deep_translator import GoogleTranslator
+        return GoogleTranslator(source="pt", target="en").translate(text)
+    except Exception:
+        return text
+
+
+# ---------------------------------------------------------------------------
 # Detecção de marca na query
 # ---------------------------------------------------------------------------
 
 def _brand_similarity(query_token: str, brand_token: str) -> float:
-    """
-    Similaridade simples entre dois tokens normalizados.
-    Retorna 1.0 se idênticos, valor parcial se um contém o outro
-    ou se a distância de edição for pequena.
-    """
     if query_token == brand_token:
         return 1.0
     if brand_token in query_token or query_token in brand_token:
-        longer = max(len(query_token), len(brand_token))
+        longer  = max(len(query_token), len(brand_token))
         shorter = min(len(query_token), len(brand_token))
         return shorter / longer
-    # distância de edição simples (sem dependência externa)
     a, b = query_token, brand_token
     if abs(len(a) - len(b)) > max(2, int(0.4 * max(len(a), len(b)))):
         return 0.0
-    # wagner-fischer com early exit
     prev = list(range(len(b) + 1))
     for i, ca in enumerate(a):
         curr = [i + 1]
@@ -70,10 +84,9 @@ def _brand_similarity(query_token: str, brand_token: str) -> float:
             cost = 0 if ca == cb else 1
             curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
         prev = curr
-    dist = prev[len(b)]
+    dist    = prev[len(b)]
     max_len = max(len(a), len(b))
-    similarity = 1.0 - dist / max_len
-    return similarity
+    return 1.0 - dist / max_len
 
 
 def detect_brand_in_query(
@@ -83,38 +96,28 @@ def detect_brand_in_query(
 ) -> tuple[Optional[str], str]:
     """
     Procura por nomes de marca na query (fuzzy, sem case/acento).
-
     Retorna (marca_encontrada | None, query_sem_marca).
-
-    Estratégia:
-    - Normaliza query e cada marca.
-    - Para marcas de uma palavra: compara token a token.
-    - Para marcas multi-palavra: verifica subsequência de tokens.
-    - Aceita match se similaridade >= threshold.
     """
     if not brands or not query.strip():
         return None, query
 
-    norm_query = _normalize(query)
+    norm_query   = _normalize(query)
     query_tokens = re.findall(r"\b\w+\b", norm_query)
 
-    best_brand: Optional[str] = None
-    best_score: float = 0.0
-    best_span: tuple[int, int] = (0, 0)  # índices de tokens removidos
+    best_brand: Optional[str]    = None
+    best_score: float            = 0.0
+    best_span:  tuple[int, int]  = (0, 0)
 
     for brand in brands:
-        norm_brand = _normalize(brand)
+        norm_brand   = _normalize(brand)
         brand_tokens = re.findall(r"\b\w+\b", norm_brand)
         if not brand_tokens:
             continue
 
         n_bt = len(brand_tokens)
-
-        # Tenta fazer sliding window de n_bt tokens na query
         for start in range(len(query_tokens) - n_bt + 1):
             window = query_tokens[start: start + n_bt]
-            # Média da similaridade token a token
-            score = sum(
+            score  = sum(
                 _brand_similarity(wt, bt)
                 for wt, bt in zip(window, brand_tokens)
             ) / n_bt
@@ -122,16 +125,13 @@ def detect_brand_in_query(
             if score > best_score and score >= threshold:
                 best_score = score
                 best_brand = brand
-                best_span = (start, start + n_bt)
+                best_span  = (start, start + n_bt)
 
     if best_brand is None:
         return None, query
 
-    # Remove os tokens da marca da query original (preservando o resto)
-    remaining_tokens = (
-        query_tokens[: best_span[0]] + query_tokens[best_span[1]:]
-    )
-    clean_query = " ".join(remaining_tokens).strip()
+    remaining_tokens = query_tokens[: best_span[0]] + query_tokens[best_span[1]:]
+    clean_query      = " ".join(remaining_tokens).strip()
     return best_brand, clean_query
 
 
@@ -155,9 +155,9 @@ class SearchService:
         clip_model,
         clip_processor,
         clip_device,
-        st_model=None,
-        bm25=None,
-        blob_repo=None,
+        st_model  = None,
+        bm25      = None,
+        blob_repo = None,
     ):
         self.logger      = logger
         self.clip_emb    = clip_embeddings
@@ -176,13 +176,13 @@ class SearchService:
 
     async def search(
         self,
-        query: str = None,
-        image_bytes: bytes = None,
-        top_k: int = 200,           # upper-bound de candidatos brutos
-        allowed_ids: Optional[set] = None,
-        page: int = 1,
-        page_size: int = 20,
-        similarity_threshold: float = SIMILARITY_THRESHOLD,
+        query: str                    = None,
+        image_bytes: bytes            = None,
+        top_k: int                    = 200,
+        allowed_ids: Optional[set]   = None,
+        page: int                     = 1,
+        page_size: int                = 20,
+        similarity_threshold: float   = SIMILARITY_THRESHOLD,
     ) -> dict:
         """
         Retorna um dict com:
@@ -191,7 +191,7 @@ class SearchService:
             "page": int,
             "page_size": int,
             "total_pages": int,
-            "items": [ ... ]
+            "items": [ ... ]   ← já enriquecidos com campos do metadata
           }
         """
         if self.clip_emb is None or self.clip_model is None:
@@ -204,7 +204,7 @@ class SearchService:
         if not has_text and not has_image:
             return self._empty_page(page, page_size)
 
-        n = len(self.metadata)
+        n            = len(self.metadata)
         clip_scores  = np.zeros(n)
         st_scores    = np.zeros(n)
         bm25_scores  = np.zeros(n)
@@ -213,10 +213,8 @@ class SearchService:
         # ── Fase 1: detecção de marca ──────────────────────────────────
         remaining_query = query or ""
         if has_text:
-            brands = self._collect_brands()
-            detected_brand, remaining_query = detect_brand_in_query(
-                query, brands
-            )
+            brands         = self._collect_brands()
+            detected_brand, remaining_query = detect_brand_in_query(query, brands)
             if detected_brand:
                 self.logger.info(
                     f"[Search] Marca detectada: '{detected_brand}' "
@@ -228,7 +226,7 @@ class SearchService:
                 )
 
         # ── Fase 2: scoring semântico ──────────────────────────────────
-        text_for_scoring = remaining_query.strip() or None
+        text_for_scoring  = remaining_query.strip() or None
         effective_has_text = bool(text_for_scoring)
 
         # CLIP
@@ -255,10 +253,6 @@ class SearchService:
             if txt_vec is not None:
                 clip_scores = self.clip_emb @ txt_vec
 
-        elif has_text and not effective_has_text:
-            # A query era só a marca — usa CLIP neutro (tudo zero, só filtra)
-            pass
-
         # ST
         if effective_has_text and self.text_emb is not None and self.st_model is not None:
             st_vec    = self.st_model.encode(text_for_scoring, normalize_embeddings=True)
@@ -277,11 +271,10 @@ class SearchService:
         elif effective_has_text:
             w_clip, w_st, w_bm25 = 0.40, 0.35, 0.25
         else:
-            # só marca, sem texto residual → pontuação uniforme
             w_clip, w_st, w_bm25 = 0.40, 0.35, 0.25
 
         final = (
-            w_clip * _minmax(clip_scores)
+            w_clip  * _minmax(clip_scores)
             + w_st  * _minmax(st_scores)
             + w_bm25 * _minmax(bm25_scores)
         )
@@ -289,7 +282,6 @@ class SearchService:
         # ── Filtragem e threshold ──────────────────────────────────────
         order = np.argsort(final)[::-1]
 
-        # Combina filtros: marca + allowed_ids externos
         effective_ids: Optional[set[str]] = None
         if brand_filter is not None and allowed_ids is not None:
             effective_ids = brand_filter & {str(x) for x in allowed_ids}
@@ -298,8 +290,6 @@ class SearchService:
         elif allowed_ids is not None:
             effective_ids = {str(x) for x in allowed_ids}
 
-        # Se a query era SOMENTE a marca (sem texto residual e sem imagem),
-        # desabilita o threshold para não filtrar por score neutro
         apply_threshold = effective_has_text or has_image
 
         candidates = []
@@ -308,7 +298,7 @@ class SearchService:
                 break
             score = float(final[idx])
             if apply_threshold and score < similarity_threshold:
-                break  # lista está ordenada, podemos parar
+                break
 
             meta = self.metadata[idx]
             pid  = str(meta.get("id", ""))
@@ -319,18 +309,25 @@ class SearchService:
             if str(meta.get("status", "ativo")).strip().lower() != "ativo":
                 continue
 
+            # Enriquece com campos básicos do metadata já em memória —
+            # evita que o frontend precise chamar /products/{id} para cada item.
             candidates.append({
-                "id_produto": pid,
-                "score":      score,
-                "score_clip": float(clip_scores[idx]),
-                "score_st":   float(st_scores[idx]),
-                "score_bm25": float(bm25_scores[idx]),
-                "imagem_url": f"/api/products/thumbnail/{pid}.jpg",
+                "id_produto":          pid,
+                "score":               score,
+                "score_clip":          float(clip_scores[idx]),
+                "score_st":            float(st_scores[idx]),
+                "score_bm25":          float(bm25_scores[idx]),
+                "imagem_url":          f"/api/products/thumbnail/{pid}.jpg",
+                # campos de exibição — vindos do metadata em memória
+                "nome_produto":        meta.get("text_corpus", "").split(" | ")[0] if meta.get("text_corpus") else "",
+                "marca":               meta.get("marca", ""),
+                "categoria_principal": meta.get("categoria_principal", ""),
+                "faixa_preco":         meta.get("faixa_preco", ""),
             })
 
         # ── Paginação ─────────────────────────────────────────────────
         total       = len(candidates)
-        total_pages = max(1, -(-total // page_size))  # ceil division
+        total_pages = max(1, -(-total // page_size))
         page        = max(1, min(page, total_pages))
         start       = (page - 1) * page_size
         page_items  = candidates[start: start + page_size]
@@ -353,8 +350,7 @@ class SearchService:
     # ------------------------------------------------------------------
 
     def _collect_brands(self) -> list[str]:
-        """Extrai lista única de marcas do metadata em memória."""
-        seen: set[str] = set()
+        seen:   set[str]  = set()
         brands: list[str] = []
         for entry in self.metadata:
             b = (entry.get("marca") or "").strip()
@@ -364,12 +360,10 @@ class SearchService:
         return brands
 
     def _ids_for_brand(self, brand: str) -> set[str]:
-        """Retorna set de product ids cuja marca bate com a detectada."""
         norm_brand = _normalize(brand)
         result: set[str] = set()
         for entry in self.metadata:
-            entry_brand = _normalize((entry.get("marca") or ""))
-            if entry_brand == norm_brand:
+            if _normalize((entry.get("marca") or "")) == norm_brand:
                 pid = str(entry.get("id", ""))
                 if pid:
                     result.add(pid)
@@ -380,12 +374,9 @@ class SearchService:
     # ------------------------------------------------------------------
 
     def _encode_text_clip(self, text: str) -> Optional[np.ndarray]:
-        try:
-            from deep_translator import GoogleTranslator
-            translated = GoogleTranslator(source="pt", target="en").translate(text)
+        translated = _translate_cached(text)
+        if translated != text:
             self.logger.info(f"[Search] CLIP: '{text}' → '{translated}'")
-        except Exception:
-            translated = text
         try:
             inputs = self.clip_proc(
                 text=[translated], return_tensors="pt", padding=True
@@ -406,27 +397,6 @@ class SearchService:
                 return F.normalize(emb, p=2, dim=-1).cpu().numpy()[0]
         except Exception as exc:
             self.logger.warning(f"[Search] Falha encode imagem: {exc}")
-            return None
-
-    # ------------------------------------------------------------------
-    # Helper — lê JSON do produto diretamente do Blob
-    # ------------------------------------------------------------------
-
-    async def _load_json(self, product_id: str) -> Optional[dict]:
-        if self.blob is None:
-            self.logger.warning(
-                "[Search] blob_repo não disponível — não foi possível carregar JSON."
-            )
-            return None
-        try:
-            data = await self.blob.download(
-                self._CONTAINER, f"data/{product_id}.json"
-            )
-            return json.loads(data)
-        except Exception as exc:
-            self.logger.warning(
-                f"[Search] JSON não encontrado no Blob | pid={product_id}: {exc}"
-            )
             return None
 
     # ------------------------------------------------------------------

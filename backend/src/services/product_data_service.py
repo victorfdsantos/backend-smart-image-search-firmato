@@ -23,12 +23,6 @@ COLUMN_MAP: dict[str, str] = {
     "Descricao_Tecnica":       "descricao_tecnica",
 }
 
-# Colunas de caminho — nunca lidas da planilha; mantidas programaticamente
-PATH_COLS = {
-    "caminho_output",
-    "caminho_thumbnail"
-}
-
 
 def _clean(val) -> Optional[str]:
     if val is None:
@@ -55,21 +49,3 @@ class ProductDataService:
                 data[key] = val
 
         return Product(**data)
-
-    # --------------------------------------------------
-    # MERGE PATHS
-    # --------------------------------------------------
-
-    def add_paths(self,product: Product,output_path: str, thumbnail_path: str,
-    ) -> Product:
-        product.caminho_output = output_path
-        product.caminho_thumbnail = thumbnail_path
-        return product
-
-    # --------------------------------------------------
-    # STATUS
-    # --------------------------------------------------
-
-    def mark_removed(self, product: Product) -> Product:
-        product.status = "inativo"
-        return product

@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 
 from services.filter_service import FilterService, FILTER_FIELDS
+from utils.filters import parse_active_filters
 from utils.logger import setup_logger
 
 router = APIRouter(prefix="/filters", tags=["Filters"])
@@ -31,20 +32,15 @@ async def get_filter_options(
 ) -> JSONResponse:
     logger = setup_logger("filter_options")
 
-    raw = {
-        "marca":               marca,
-        "categoria_principal": categoria_principal,
-        "subcategoria":        subcategoria,
-        "faixa_preco":         faixa_preco,
-        "ambiente":            ambiente,
-        "forma":               forma,
-        "material_principal":  material_principal,
-    }
-    active_filters = {
-        k: [v.strip() for v in val.split(",") if v.strip()]
-        for k, val in raw.items()
-        if val and val.strip()
-    }
+    active_filters = parse_active_filters(
+        marca               = marca,
+        categoria_principal = categoria_principal,
+        subcategoria        = subcategoria,
+        faixa_preco         = faixa_preco,
+        ambiente            = ambiente,
+        forma               = forma,
+        material_principal  = material_principal,
+    )
 
     # lê o índice já construído do app_state (carregado no startup do Blob)
     service = FilterService(

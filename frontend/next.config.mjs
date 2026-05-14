@@ -1,5 +1,3 @@
-
-
 const nextConfig = {
   // Enables standalone build for minimal Docker image
   output: "standalone",
@@ -9,15 +7,26 @@ const nextConfig = {
     const apiBase = process.env.API_BASE ?? "http://localhost:8000";
     return [
       {
-        source: "/api/:path*",
+        source:      "/api/:path*",
         destination: `${apiBase}/:path*`,
       },
     ];
   },
+
   images: {
     remotePatterns: [
-      { protocol: "http", hostname: "**" },
-      { protocol: "https", hostname: "**" },
+      // App Service default domain
+      {
+        protocol: "https",
+        hostname: "*.azurewebsites.net",
+      },
+      // Local development
+      {
+        protocol: "http",
+        hostname: "localhost",
+      },
+      // Custom domain — ajuste conforme necessário
+      // { protocol: "https", hostname: "yourdomain.com" },
     ],
   },
 };
